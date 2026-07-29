@@ -1,0 +1,354 @@
+package pathinside_test
+
+import (
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/cplieger/pathinside"
+)
+
+// fs turns a slash-written path into this platform's spelling, so the tables
+// below read as paths while still exercising the real separator.
+func fs(p string) string {
+	return filepath.FromSlash(p)
+}
+
+// TestInside pins the containment contract: the root itself is inside, a real
+// descendant is inside, a sibling whose name merely extends the root's is NOT
+// (the case a strings.HasPrefix test accepts), a traversal out of the root is
+// not, a name that merely begins with two dots still is, and a pair that cannot
+// be compared lexically (absolute against relative) is refused rather than
+// guessed.
+func TestInside(t *testing.T) {
+	tests := []struct {
+		name   string
+		root   string
+		target string
+		want   bool
+	}{
+		{"root itself", fs("/a/b"), fs("/a/b"), true},
+		{"root itself, unclean target", fs("/a/b"), fs("/a/b/"), true},
+		{"root itself, unclean root", fs("/a/b/"), fs("/a/b"), true},
+		{"root itself via a no-op traversal", fs("/a/b"), fs("/a/x/../b"), true},
+		{"direct child", fs("/a/b"), fs("/a/b/c"), true},
+		{"deep descendant", fs("/a/b"), fs("/a/b/c/d/e.txt"), true},
+		{"descendant through a cleaned traversal", fs("/a/b"), fs("/a/b/c/../d"), true},
+		{"prefix sibling", fs("/a/b"), fs("/a/b-evil"), false},
+		{"prefix sibling, deeper", fs("/a/b"), fs("/a/b-evil/c"), false},
+		{"prefix sibling with no separator at all", fs("/a/b"), fs("/a/bevil"), false},
+		{"parent", fs("/a/b"), fs("/a"), false},
+		{"sibling", fs("/a/b"), fs("/a/c"), false},
+		{"traversal out of the root", fs("/a/b"), fs("/a/b/../../etc/passwd"), false},
+		{"traversal to the filesystem root", fs("/a/b"), "/", false},
+		{"leading double-dot name is not a traversal", fs("/a/b"), fs("/a/b/..extras/movie.mkv"), true},
+		{"double-dot name as the whole segment", fs("/a/b"), fs("/a/b/..extras"), true},
+		{"three dots is a name", fs("/a/b"), fs("/a/b/.../x"), true},
+		{"dotfile child", fs("/a/b"), fs("/a/b/.hidden"), true},
+		{"absolute target, relative root", "b", fs("/a/b/c"), false},
+		{"relative target, absolute root", fs("/a/b"), fs("c/d"), false},
+		{"both relative, descendant", fs("a/b"), fs("a/b/c"), true},
+		{"both relative, root itself", fs("a/b"), fs("a/b"), true},
+		{"both relative, escape", fs("a/b"), fs("a/c"), false},
+		{"both relative, up and back down", fs("a/b"), fs("a/b/../b/c"), true},
+		{"dot root, plain child", ".", "c", true},
+		{"dot root, parent", ".", "..", false},
+		{"dot root, dotfile", ".", fs(".hidden"), true},
+		{"filesystem root contains everything absolute", "/", fs("/etc/passwd"), true},
+		{"filesystem root contains itself", "/", "/", true},
+		{"empty root is the current directory", "", "c", true},
+		{"empty target is the root itself", ".", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathinside.Inside(tt.root, tt.target); got != tt.want {
+				t.Errorf("Inside(%q, %q) = %v, want %v", tt.root, tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRelEscapes pins the relative-name half on its own: the exact ".." and a
+// separator-led traversal escape, a name that merely begins with two dots does
+// not, an uncleaned name whose traversal is buried mid-string still does, and an
+// absolute path does NOT escape by this test (the caller owns that refusal).
+func TestRelEscapes(t *testing.T) {
+	tests := []struct {
+		name string
+		rel  string
+		want bool
+	}{
+		{"exact parent", "..", true},
+		{"parent with a child", fs("../x"), true},
+		{"two levels up", fs("../../etc/passwd"), true},
+		{"uncleaned traversal that ends up above the root", fs("a/../.."), true},
+		{"uncleaned traversal that lands beside the root", fs("a/../../b"), true},
+		{"trailing traversal that stays inside", fs("a/b/../c"), false},
+		{"plain name", "x", false},
+		{"plain nested name", fs("a/b/c.txt"), false},
+		{"name beginning with two dots", fs("..extras/movie.mkv"), false},
+		{"two dots as a whole segment name", "..extras", false},
+		{"three dots", "...", false},
+		{"three dots with a child", fs(".../x"), false},
+		{"dotfile", ".hidden", false},
+		{"current directory", ".", false},
+		{"empty name cleans to the current directory", "", false},
+		{"traversal buried below a segment stays inside", fs("a/../b"), false},
+		{"absolute path does not escape by this test", fs("/etc/passwd"), false},
+		{"absolute root does not escape by this test", "/", false},
+		{"absolute traversal is clamped by cleaning, so it does not escape either", fs("/.."), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathinside.RelEscapes(tt.rel); got != tt.want {
+				t.Errorf("RelEscapes(%q) = %v, want %v", tt.rel, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSeparatorPrecision states the two decisions the separator buys, in the
+// terms an adopting caller reasons about: the sibling a naive prefix test
+// accepts is refused, and the legitimate two-dot NAME a naive ".." prefix test
+// refuses is accepted. Written against the real separator rather than a
+// hardcoded slash so the rule is pinned on whatever platform runs it.
+func TestSeparatorPrecision(t *testing.T) {
+	sep := string(filepath.Separator)
+	root := sep + "srv" + sep + "data"
+
+	if pathinside.Inside(root, root+"-evil") {
+		t.Errorf("Inside(%q, %q) = true, want false: a sibling whose name extends the root's is outside it", root, root+"-evil")
+	}
+	if !pathinside.Inside(root, root+sep+"..extras") {
+		t.Errorf("Inside(%q, %q) = false, want true: a name beginning with two dots is a name, not a traversal", root, root+sep+"..extras")
+	}
+	if !pathinside.RelEscapes(".." + sep + "escape") {
+		t.Errorf("RelEscapes(%q) = false, want true", ".."+sep+"escape")
+	}
+	if pathinside.RelEscapes("..extras") {
+		t.Errorf("RelEscapes(%q) = true, want false", "..extras")
+	}
+}
+
+// TestNonSeparatorByteIsANameOnUnix pins the platform half of the separator
+// rule: a byte that is a separator on another OS is an ordinary filename
+// character here, so "..\\evil" is a name on Unix (no escape) and a traversal on
+// Windows (escape). Splitting this out of the tables keeps them platform-neutral
+// while still asserting the platform-dependent half.
+func TestNonSeparatorByteIsANameOnUnix(t *testing.T) {
+	got := pathinside.RelEscapes(`..\evil`)
+	want := runtime.GOOS == "windows"
+	if got != want {
+		t.Errorf("RelEscapes(%q) = %v, want %v on %s", `..\evil`, got, want, runtime.GOOS)
+	}
+}
+
+// TestNameValidationIsStricterThanContainment pins the deliberate asymmetry
+// between the two functions, and with it the reason they are separate: RelEscapes
+// judges the shape of a NAME, Inside judges the location of a RESULT. A name that
+// walks out of the root and back into a directory with the same name is refused
+// as a name while its joined result is inside the root. A caller validating an
+// untrusted name wants the strict answer; a caller classifying a path it has
+// already been handed wants the locational one.
+func TestNameValidationIsStricterThanContainment(t *testing.T) {
+	root, rel := "a", fs("../a")
+	if !pathinside.RelEscapes(rel) {
+		t.Errorf("RelEscapes(%q) = false, want true: the name walks out of its root", rel)
+	}
+	if joined := filepath.Join(root, rel); !pathinside.Inside(root, joined) {
+		t.Errorf("Inside(%q, %q) = false, want true: the joined result is the root itself", root, joined)
+	}
+}
+
+// functions share: for any pair filepath.Rel can compare, Inside is exactly
+// "the relative path does not escape". A future change that tightens one half
+// without the other breaks here.
+func TestInsideAgreesWithRelEscapes(t *testing.T) {
+	pairs := [][2]string{
+		{fs("/a/b"), fs("/a/b")},
+		{fs("/a/b"), fs("/a/b/c")},
+		{fs("/a/b"), fs("/a/b-evil")},
+		{fs("/a/b"), fs("/a")},
+		{fs("/a/b"), fs("/a/b/..extras")},
+		{fs("a/b"), fs("a/b/c")},
+		{".", ".."},
+	}
+	for _, p := range pairs {
+		root, target := p[0], p[1]
+		rel, err := filepath.Rel(root, target)
+		if err != nil {
+			t.Fatalf("filepath.Rel(%q, %q) failed: %v", root, target, err)
+		}
+		if got, want := pathinside.Inside(root, target), !pathinside.RelEscapes(rel); got != want {
+			t.Errorf("Inside(%q, %q) = %v, but RelEscapes(%q) = %v", root, target, got, rel, !want)
+		}
+	}
+}
+
+// TestHasDotDot pins the hygiene half: a ".." COMPONENT counts wherever it sits
+// — first, last, or buried mid-path where cleaning would have hidden it — and
+// nothing that merely contains or begins with two dots does. The unclean
+// spellings are the point of the function rather than an edge case: the path is
+// examined AS WRITTEN, so a traversal that would normalize away is still
+// reported. The empty string has no components and is false.
+func TestHasDotDot(t *testing.T) {
+	tests := []struct {
+		name string
+		p    string
+		want bool
+	}{
+		{"empty string has no components", "", false},
+		{"exact parent", "..", true},
+		{"parent with a child", fs("../dumps"), true},
+		{"traversal buried mid-path", fs("a/../b"), true},
+		{"traversal buried mid-path, absolute", fs("/dumps/../etc"), true},
+		{"traversal that normalizes away entirely", fs("/run/secrets/../../etc/shadow"), true},
+		{"traversal as the last component", fs("/dumps/nightly/.."), true},
+		{"traversal as the last component, relative", fs("a/.."), true},
+		{"traversal as the first component of an absolute path", fs("/../etc"), true},
+		{"three dots is a name", "...", false},
+		{"three dots with a child", fs(".../x"), false},
+		{"two dots inside a name", "key..v2", false},
+		{"two dots inside a name, absolute", fs("/dumps/a..b"), false},
+		{"name beginning with two dots", fs("..extras/movie.mkv"), false},
+		{"two dots as a whole segment name", "..extras", false},
+		{"plain absolute path", fs("/run/secrets/pgpass"), false},
+		{"plain relative path", fs("a/b/c.txt"), false},
+		{"dotfile", ".hidden", false},
+		{"current directory", ".", false},
+		{"filesystem root", fs("/"), false},
+		{"trailing separator after the traversal", fs("/dumps/../"), true},
+		{"trailing separator, no traversal", fs("/dumps/nightly/"), false},
+		{"doubled separators around the traversal", fs("a//..//b"), true},
+		{"doubled separators, no traversal", fs("/dumps//nightly"), false},
+		{"dot component beside a traversal", fs("./../dumps"), true},
+		{"dot component mid-path, no traversal", fs("a/./b"), false},
+		{"dot component with a trailing separator", fs("./"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathinside.HasDotDot(tt.p); got != tt.want {
+				t.Errorf("HasDotDot(%q) = %v, want %v", tt.p, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHasDotDotBackslashIsANameOnUnix pins the filepath.ToSlash contract, which
+// is the platform half of the component rule and the reason the rule is worth
+// centralizing. ToSlash rewrites "\" to "/" ONLY on Windows, so `a\..\b` is ONE
+// component here — a legal Unix filename whose name merely contains dots, which
+// must NOT read as traversal — while on Windows the same string is three
+// components and the answer flips to true. Splitting this out of the table keeps
+// the table platform-neutral while still asserting the platform-dependent half.
+func TestHasDotDotBackslashIsANameOnUnix(t *testing.T) {
+	got := pathinside.HasDotDot(`a\..\b`)
+	want := runtime.GOOS == "windows"
+	if got != want {
+		t.Errorf("HasDotDot(%q) = %v, want %v on %s", `a\..\b`, got, want, runtime.GOOS)
+	}
+}
+
+// TestIsCanonical pins the other hygiene predicate: canonical means cleaning
+// would change nothing, so the whole class of spellings a later normalization
+// would silently rewrite — a trailing separator, a doubled separator, a "."
+// component, a traversal buried mid-path — is refused in one test, and the empty
+// string (which cleans to ".") is refused with them.
+//
+// The load-bearing rows are ".." and "../dumps", which are TRUE. They are
+// perfectly canonical while still traversing, which is why canonicality is not
+// hygiene and why a validating caller needs the OR of both predicates
+// (!IsCanonical(p) || HasDotDot(p)) rather than either alone.
+func TestIsCanonical(t *testing.T) {
+	tests := []struct {
+		name string
+		p    string
+		want bool
+	}{
+		{"cleaned absolute path", fs("/a/b"), true},
+		{"doubled separator", fs("/a//b"), false},
+		{"trailing separator", fs("a/b/"), false},
+		{"dot component", fs("a/./b"), false},
+		{"empty string cleans to the current directory", "", false},
+		{"a leading traversal is canonical yet traverses", "..", true},
+		{"a leading traversal with a child is canonical yet traverses", fs("../dumps"), true},
+		{"two leading traversals are canonical", fs("../.."), true},
+		{"a buried traversal is not canonical", fs("a/../b"), false},
+		{"a buried traversal is not canonical, absolute", fs("/dumps/../etc"), false},
+		{"a traversal clamped at the filesystem root is not canonical", fs("/.."), false},
+		{"current directory", ".", true},
+		{"filesystem root", fs("/"), true},
+		{"plain name", "x", true},
+		{"cleaned relative path", fs("a/b/c.txt"), true},
+		{"name beginning with two dots", "..extras", true},
+		{"three dots", "...", true},
+		{"two dots inside a name", fs("/dumps/a..b"), true},
+		{"dotfile", ".hidden", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathinside.IsCanonical(tt.p); got != tt.want {
+				t.Errorf("IsCanonical(%q) = %v, want %v", tt.p, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAxesDisagreeOnUncleanInput is the regression guard the two axes exist for.
+// On UNCLEAN input the two predicates give OPPOSITE answers: RelEscapes cleans
+// first, so a traversal that normalizes away leaves no root and reads false,
+// while HasDotDot examines the path as written and reads true. That is not a
+// near-miss but an INVERSION — asking the hygiene question with the containment
+// function turns a deliberate refusal into an acceptance.
+//
+// Four fleet repos would have done exactly that if RelEscapes had been adopted
+// at their hygiene boundaries, at a credential-read and a backup-destination
+// boundary: a config-supplied "/run/secrets/../../etc/shadow" cleans to
+// "/etc/shadow", which escapes no root, so the gate installed to refuse a
+// traversal would have opened on the very value it was installed to refuse, and
+// a backup destination "/dumps/../etc" would have been accepted as a write
+// target. Both are caught here and nowhere else, so a future change that folds
+// either function into the other breaks this test.
+//
+// The converse from the doc comments is asserted alongside it: cleaning is what
+// BOUNDS the disagreement, because Clean leaves ".." only at the front of a
+// relative path. On CANONICAL input the two axes AGREE.
+func TestAxesDisagreeOnUncleanInput(t *testing.T) {
+	unclean := []struct {
+		name           string
+		p              string
+		wantRelEscapes bool
+		wantHasDotDot  bool
+	}{
+		{"credential path whose traversal normalizes away", fs("/run/secrets/../../etc/shadow"), false, true},
+		{"backup destination written with a traversal", fs("/dumps/../etc"), false, true},
+		{"relative path whose traversal cancels out", fs("a/../b"), false, true},
+	}
+	for _, tt := range unclean {
+		t.Run(tt.name, func(t *testing.T) {
+			if pathinside.IsCanonical(tt.p) {
+				t.Fatalf("IsCanonical(%q) = true, want false: the disagreement is about UNCLEAN input", tt.p)
+			}
+			if got := pathinside.RelEscapes(tt.p); got != tt.wantRelEscapes {
+				t.Errorf("RelEscapes(%q) = %v, want %v", tt.p, got, tt.wantRelEscapes)
+			}
+			if got := pathinside.HasDotDot(tt.p); got != tt.wantHasDotDot {
+				t.Errorf("HasDotDot(%q) = %v, want %v", tt.p, got, tt.wantHasDotDot)
+			}
+		})
+	}
+
+	for _, p := range []string{"..", fs("../dumps")} {
+		t.Run("canonical input agrees: "+p, func(t *testing.T) {
+			if !pathinside.IsCanonical(p) {
+				t.Fatalf("IsCanonical(%q) = false, want true: this case is about CANONICAL input", p)
+			}
+			if !pathinside.RelEscapes(p) {
+				t.Errorf("RelEscapes(%q) = false, want true", p)
+			}
+			if !pathinside.HasDotDot(p) {
+				t.Errorf("HasDotDot(%q) = false, want true", p)
+			}
+		})
+	}
+}
