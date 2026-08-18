@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cplieger/pathinside"
+	"github.com/cplieger/pathinside/v2"
 )
 
 // fuzzPaths is the adversarial seed corpus shared by the targets below: roots
@@ -46,11 +46,11 @@ var fuzzPaths = []string{
 	"/a/b/ c ",
 }
 
-// FuzzInsideMatchesRelOracle drives Inside with arbitrary path pairs and checks
-// it against an independently-derived filepath.Rel oracle: the target is inside
-// the root exactly when Rel succeeds and the FIRST SEGMENT of its result is not
-// "..". The oracle splits the relative path into segments rather than testing a
-// string prefix, so it is not a restatement of the implementation — a
+// FuzzInsideMatchesRelOracle drives Root.Contains with arbitrary path pairs and
+// checks it against an independently-derived filepath.Rel oracle: the target is
+// inside the root exactly when Rel succeeds and the FIRST SEGMENT of its result
+// is not "..". The oracle splits the relative path into segments rather than
+// testing a string prefix, so it is not a restatement of the implementation — a
 // regression to the naive strings.HasPrefix(rel, "..") form disagrees with it on
 // every name that merely begins with two dots ("..extras"), and a regression to
 // a strings.HasPrefix(target, root) containment test disagrees on every
@@ -71,31 +71,41 @@ func FuzzInsideMatchesRelOracle(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, root, target string) {
-		got := pathinside.Inside(root, target)
+		if root == "" {
+			// The empty root is the one deliberate divergence from the
+			// filepath.Rel oracle: Root("") fails closed and contains nothing,
+			// where Rel would clean "" to "." (see the Root doc). Pinned by
+			// TestRootZeroValue; the oracle governs every non-empty root.
+			if pathinside.Root(root).Contains(target) {
+				t.Fatalf(`Root("").Contains(%q) = true, want false: the empty root must contain nothing`, target)
+			}
+			return
+		}
+		got := pathinside.Root(root).Contains(target)
 
 		rel, err := filepath.Rel(root, target)
 		if err != nil {
 			if got {
-				t.Fatalf("Inside(%q, %q) = true, but the pair is not lexically comparable: %v", root, target, err)
+				t.Fatalf("Root(%q).Contains(%q) = true, but the pair is not lexically comparable: %v", root, target, err)
 			}
 			return
 		}
 
 		first, _, _ := strings.Cut(rel, string(filepath.Separator))
 		if want := first != ".."; got != want {
-			t.Fatalf("Inside(%q, %q) = %v, oracle (first segment of rel %q) = %v", root, target, got, rel, want)
+			t.Fatalf("Root(%q).Contains(%q) = %v, oracle (first segment of rel %q) = %v", root, target, got, rel, want)
 		}
 		if !got {
 			return
 		}
 		if pathinside.RelEscapes(rel) {
-			t.Fatalf("Inside(%q, %q) = true but RelEscapes(%q) = true", root, target, rel)
+			t.Fatalf("Root(%q).Contains(%q) = true but RelEscapes(%q) = true", root, target, rel)
 		}
 		if filepath.IsAbs(rel) {
-			t.Fatalf("Inside(%q, %q) = true but the relative form %q is absolute", root, target, rel)
+			t.Fatalf("Root(%q).Contains(%q) = true but the relative form %q is absolute", root, target, rel)
 		}
 		if joined, want := filepath.Join(root, rel), filepath.Clean(target); joined != want {
-			t.Fatalf("Inside(%q, %q) = true but Join(root, %q) = %q, want %q", root, target, rel, joined, want)
+			t.Fatalf("Root(%q).Contains(%q) = true but Join(root, %q) = %q, want %q", root, target, rel, joined, want)
 		}
 	})
 }
@@ -124,14 +134,14 @@ func FuzzInsideRejectsPrefixSibling(f *testing.F) {
 		if suffix == "" || strings.ContainsAny(suffix, `/\`) {
 			return // an appended separator starts a new segment: that is a child, not a sibling
 		}
-		if pathinside.Inside(root, root+suffix) {
-			t.Fatalf("Inside(%q, %q) = true: extending the root's own name must not be inside it", root, root+suffix)
+		if pathinside.Root(root).Contains(root + suffix) {
+			t.Fatalf("Root(%q).Contains(%q) = true: extending the root's own name must not be inside it", root, root+suffix)
 		}
 	})
 }
 
 // FuzzRelEscapesGovernsJoin pins the safety direction of the relationship
-// between the two exported functions over arbitrary inputs: a RELATIVE name
+// between the two containment predicates over arbitrary inputs: a RELATIVE name
 // RelEscapes accepts always lands INSIDE the root it is joined onto. That is the
 // contract a caller leans on when it validates a name first (an archive entry, a
 // configured sub-path) and joins it afterwards — the validation has to be at
@@ -142,7 +152,7 @@ func FuzzInsideRejectsPrefixSibling(f *testing.F) {
 // TestNameValidationIsStricterThanContainment pins the counterexample: a name
 // that walks out of the root and back into a directory with the same name
 // ("../a" under root "a") is refused by RelEscapes and still lands inside. The
-// two functions answer different questions — one about the shape of a NAME, one
+// two predicates answer different questions — one about the shape of a NAME, one
 // about the location of a RESULT — which is why the package keeps them apart.
 //
 // The accepted direction is restricted to non-absolute names, and that
@@ -172,6 +182,11 @@ func FuzzRelEscapesGovernsJoin(f *testing.F) {
 			return
 		}
 
+		if root == "" {
+			// Root("") contains nothing by contract, so the join invariant is
+			// asserted only for non-empty roots (TestRootZeroValue owns "").
+			return
+		}
 		joined := filepath.Join(root, rel)
 		if filepath.IsAbs(joined) != filepath.IsAbs(filepath.Clean(root)) {
 			// filepath.Join drops an empty element, so joining an absolute name
@@ -179,7 +194,7 @@ func FuzzRelEscapesGovernsJoin(f *testing.F) {
 			// a path under that root, so the invariant is not about it.
 			return
 		}
-		if !pathinside.Inside(root, joined) {
+		if !pathinside.Root(root).Contains(joined) {
 			t.Fatalf("RelEscapes(%q) = false but Join(%q, rel) = %q is not Inside the root", rel, root, joined)
 		}
 	})

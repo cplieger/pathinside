@@ -1,7 +1,8 @@
 // Package pathinside judges path NAMES, along two axes that must not be fused.
 //
 // CONTAINMENT needs a root and asks where a path points: is this cleaned target
-// the same as this root, or beneath it? [Inside] and [RelEscapes] answer it.
+// the same as this root, or beneath it? [Root.Contains] and [RelEscapes] answer
+// it.
 //
 // SYNTACTIC HYGIENE needs no root and asks how a path is written: does it spell
 // a traversal, is it in cleaned form? [HasDotDot] and [IsCanonical] answer that.
@@ -40,7 +41,13 @@
 // the target is reached by leaving the root, which is what "outside" means —
 // and the separator is what keeps "..extras" a name rather than a traversal.
 //
-// [Inside] is that rule. [RelEscapes] is its second half on its own, for a
+// [Root.Contains] is that rule. The root is a [Root] — a plain string conversion,
+// made once where the confinement boundary is decided — and every target is
+// judged against it by the method, so the direction of the comparison is fixed
+// at construction rather than restated, swappably, at each call site: the two
+// sides of a containment question are not interchangeable, and handing them to
+// a function as two same-typed parameters let a transposition compile and
+// invert the answer. [RelEscapes] is the rule's second half on its own, for a
 // caller that must validate a relative NAME before joining it onto anything, or
 // that already holds a filepath.Rel result it needs for other work (an
 // os.Root-relative Stat or Remove) and should not pay for a second Rel. Name
@@ -48,9 +55,14 @@
 // asked at different moments, and they do not always agree. RelEscapes is the
 // stricter of the two — a name that leaves the root and returns to a directory
 // with the same name ("../a" under root "a") is refused as a name while its
-// joined result is Inside — and a caller validating an untrusted name wants that
+// joined result is inside — and a caller validating an untrusted name wants that
 // strictness, because a legitimate name has no business leaving. Fusing them
 // would pick one answer for both callers.
+//
+// Only the containment predicate is a method, because only it has a root and a
+// direction. [RelEscapes], [HasDotDot] and [IsCanonical] are package-level
+// functions taking a single path: there is no pair to swap and no side to fix,
+// so a type there would be ceremony.
 //
 // # Syntactic hygiene
 //
@@ -82,7 +94,7 @@
 //
 // # Lexical, not enforced
 //
-// All four functions are LEXICAL. They compare and inspect names and resolve
+// All four predicates are LEXICAL. They compare and inspect names and resolve
 // nothing: a symlink inside the root pointing anywhere at all is still lexically
 // inside it, and a path that passes can still be swapped between the check and
 // the syscall. That is the right answer for a name-level decision (is this path
@@ -93,7 +105,7 @@
 // lexical gate in front of it where the caller also wants an early, quiet
 // refusal.
 //
-// The root itself is inside: Inside(root, root) is true. A caller that must
+// The root itself is inside: Root(p).Contains(p) is true. A caller that must
 // exclude it (an operation whose empty relative name would rewrite the tree's
 // own directory) tests that separately; a false from Inside never means "equal
 // to root".

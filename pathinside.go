@@ -5,29 +5,57 @@ import (
 	"strings"
 )
 
-// Inside reports whether target names root itself or a path beneath it. It is
-// the containment predicate a caller reaches for before letting an
+// Root is the tree a containment question is asked against — the sticky side
+// of the comparison. Construct it ONCE, where the confinement boundary is
+// decided (a watch root, an extraction directory, a configured data
+// directory), and let targets flow past it: the misuse-resistance is bought
+// at the construction site, not by the type. An inline conversion at the call
+// site — pathinside.Root(x).Contains(y) — still compiles with x and y
+// transposed, which is the v1 hazard in new spelling; a Root held in a named
+// field or variable is what makes a transposition visible. (Most call sites
+// have a boundary to construct at; a site whose root varies per item while
+// the TARGET is fixed is the inverted case — keep the inline form there and
+// let the variable names carry the direction.)
+//
+// A Root is constructed by plain conversion: pathinside.Root("/srv/data"). The
+// conversion IS the construction — no constructor, no validation, no hidden
+// state, matching the package's pure-function character. Nothing is normalized
+// at conversion time either: cleaning happens where it always did, inside
+// filepath.Rel at judgment time, so Root("/a/b/"), Root("/a/./b") and
+// Root("/a/b") judge every target identically.
+//
+// The zero value Root("") CONTAINS NOTHING: every Contains answer is false.
+// An empty root is almost always an unset field or a missed configuration
+// value, and the fail-open alternative — filepath.Rel cleans "" to ".",
+// silently confining to the current working directory, a boundary nobody
+// chose — is the direction a containment bug must not take. A caller that
+// genuinely wants cwd-relative containment writes Root(".") and says so.
+type Root string
+
+// Contains reports whether target names the root itself or a path beneath it. It
+// is the containment predicate a caller reaches for before letting an
 // externally-influenced path reach the filesystem: an archive entry name, a
 // filesystem-event path, a request-supplied file path, a path read back out of
 // a log the program itself wrote.
 //
-// Both arguments are cleaned: filepath.Rel cleans base and target itself, so a
-// caller passing filepath.Clean'd paths and one passing raw ones get the same
-// answer, and "/a/b/" , "/a/./b" and "/a/x/../b" are all the same root. Nothing
-// else is normalized — no symlink resolution, no case folding, no Unicode
-// normalization, no conversion between absolute and relative.
+// The root and the target are both cleaned: filepath.Rel cleans base and target
+// itself, so a caller passing filepath.Clean'd paths and one passing raw ones
+// get the same answer, and "/a/b/" , "/a/./b" and "/a/x/../b" are all the same
+// root. Nothing else is normalized — no symlink resolution, no case folding, no
+// Unicode normalization, no conversion between absolute and relative.
 //
-// ROOT ITSELF IS INSIDE. Inside(root, root) is true, because the question this
-// predicate answers is "may this path be treated as part of the tree rooted at
-// root", and the tree includes its own root: a scan that starts at root, a
-// watch registered on root, an archive's "./" entry. A caller that must EXCLUDE
-// the root (an operation that would rewrite or delete the tree's own directory
-// when handed an empty relative name) needs a second, explicit test of its own —
-// do not read a false from this function as "not equal to root".
+// THE ROOT ITSELF IS CONTAINED. Root(p).Contains(p) is true for every non-empty p, because the
+// question this predicate answers is "may this path be treated as part of the
+// tree rooted at root", and the tree includes its own root: a scan that starts
+// at root, a watch registered on root, an archive's "./" entry. A caller that
+// must EXCLUDE the root (an operation that would rewrite or delete the tree's
+// own directory when handed an empty relative name) needs a second, explicit
+// test of its own — do not read a false from this method as "not equal to
+// root".
 //
 // The comparison is LEXICAL, and that is the whole contract: it says nothing
 // about what the two paths resolve to. A symlink at root/link pointing at /etc
-// makes root/link/passwd lexically inside root, and this function reports it as
+// makes root/link/passwd lexically inside root, and this method reports it as
 // such. Lexical containment is the right answer for a NAME-level decision (is
 // this name mine to handle) and the wrong one for an ACCESS-level decision (may
 // this open succeed). A caller that opens, reads, writes, renames or removes
@@ -40,10 +68,13 @@ import (
 // Two paths that cannot be compared lexically are refused rather than guessed:
 // an absolute target against a relative root (or the reverse), and on Windows
 // two different volumes. filepath.Rel reports those as an error, and this
-// function answers false, so an unanswerable comparison never reads as
+// method answers false, so an unanswerable comparison never reads as
 // containment.
-func Inside(root, target string) bool {
-	rel, err := filepath.Rel(root, target)
+func (r Root) Contains(target string) bool {
+	if r == "" {
+		return false
+	}
+	rel, err := filepath.Rel(string(r), target)
 	if err != nil {
 		return false
 	}
@@ -53,14 +84,15 @@ func Inside(root, target string) bool {
 // RelEscapes reports whether rel, read as a path relative to some root, leaves
 // that root: it IS ".." or it begins with ".." followed by a separator.
 //
-// It is deliberately a separate function from Inside, not folded into it: the
-// two answer different questions, and fusing them would force every caller to
-// buy both. Inside asks whether one path lies within another. RelEscapes asks
-// whether a relative NAME is well-formed for use under a root — which a caller
-// must ask BEFORE it joins the name onto anything (an archive entry name, a
-// configured sub-path), and which a caller holding a filepath.Rel result it
-// needs for other work (an os.Root-relative Stat or Remove) can ask without
-// paying for a second Rel.
+// It is deliberately a separate function from [Root.Contains], not folded into
+// it: the two answer different questions, and fusing them would force every
+// caller to buy both. Root.Contains asks whether one path lies within another.
+// RelEscapes asks whether a relative NAME is well-formed for use under a root —
+// which a caller must ask BEFORE it joins the name onto anything (an archive
+// entry name, a configured sub-path), and which a caller holding a filepath.Rel
+// result it needs for other work (an os.Root-relative Stat or Remove) can ask
+// without paying for a second Rel. It takes the relative name alone — no root
+// and no second path — so there is no pair to swap and no [Root] to construct.
 //
 // rel is cleaned first, so an uncleaned name whose traversal is buried
 // mid-string ("a/../../etc") is still caught. A relative name whose result is
@@ -76,12 +108,12 @@ func Inside(root, target string) bool {
 // is asking [HasDotDot], and reaching for RelEscapes there turns a deliberate
 // refusal into an acceptance.
 //
-// This is a NAME rule, and it is deliberately stricter than [Inside]'s
+// This is a NAME rule, and it is deliberately stricter than [Root.Contains]'s
 // locational one: a name that walks out of the root and back into a directory
 // that happens to share the root's name ("../a" under root "a") is refused here
-// while the joined result — the root itself — is Inside. A caller validating an
+// while the joined result — the root itself — is inside. A caller validating an
 // untrusted name wants the strict answer, because a legitimate name has no
-// business leaving; a caller classifying a path it was handed wants Inside.
+// business leaving; a caller classifying a path it was handed wants Root.Contains.
 // Fusing the two would silently pick one of those answers for both callers.
 //
 // The test is separator-precise, and that precision is the reason this rule is

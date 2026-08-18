@@ -4,18 +4,19 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/cplieger/pathinside"
+	"github.com/cplieger/pathinside/v2"
 )
 
-// ExampleInside shows the three answers that matter: the root itself is inside,
-// a real descendant is inside, and a sibling whose name merely extends the
-// root's is not — the case a strings.HasPrefix test accepts.
-func ExampleInside() {
-	root := "/srv/data"
-	fmt.Println(pathinside.Inside(root, "/srv/data"))
-	fmt.Println(pathinside.Inside(root, "/srv/data/2026/report.csv"))
-	fmt.Println(pathinside.Inside(root, "/srv/data-evil/report.csv"))
-	fmt.Println(pathinside.Inside(root, "/srv/data/../../etc/passwd"))
+// ExampleRoot_Contains shows the three answers that matter: the root itself is
+// inside, a real descendant is inside, and a sibling whose name merely extends
+// the root's is not — the case a strings.HasPrefix test accepts. The Root is a
+// plain conversion, made once; every target is judged against it.
+func ExampleRoot_Contains() {
+	root := pathinside.Root("/srv/data")
+	fmt.Println(root.Contains("/srv/data"))
+	fmt.Println(root.Contains("/srv/data/2026/report.csv"))
+	fmt.Println(root.Contains("/srv/data-evil/report.csv"))
+	fmt.Println(root.Contains("/srv/data/../../etc/passwd"))
 	// Output:
 	// true
 	// true
