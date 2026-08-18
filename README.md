@@ -1,6 +1,6 @@
 # pathinside
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/pathinside.svg)](https://pkg.go.dev/github.com/cplieger/pathinside)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/pathinside/v2.svg)](https://pkg.go.dev/github.com/cplieger/pathinside/v2)
 [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/pathinside)](https://github.com/cplieger/pathinside/blob/main/go.mod)
 [![Test coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/pathinside/badges/coverage.json)](https://github.com/cplieger/pathinside/actions/workflows/coverage.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13882/badge)](https://www.bestpractices.dev/projects/13882)
@@ -19,28 +19,32 @@ Standard library only, zero dependencies.
 
 ## Two axes
 
-**Containment** needs a root and asks where a path points — `Inside`, `RelEscapes`. **Hygiene** needs no root and asks how a path is written — `HasDotDot`, `IsCanonical`. Pick by whether you have a root: an archive entry about to be joined onto an extraction directory is containment; a credential path, a backup destination or a cache directory read from a config file or a flag is hygiene.
+**Containment** needs a root and asks where a path points — `Root.Contains`, `RelEscapes`. **Hygiene** needs no root and asks how a path is written — `HasDotDot`, `IsCanonical`. Pick by whether you have a root: an archive entry about to be joined onto an extraction directory is containment; a credential path, a backup destination or a cache directory read from a config file or a flag is hygiene.
 
 The axes are separate because they disagree, and they disagree on the inputs that matter. Containment cleans first, so a traversal that normalizes away is not an escape: `/run/secrets/../../etc/shadow` cleans to `/etc/shadow`, leaves no root, and `RelEscapes` reports `false`. Hygiene never cleans, so `HasDotDot` reports `true` — a legitimate credential path was not written with two traversals in it. Answering a hygiene question with a containment function is therefore not a near-miss but an inversion: the refusal becomes an acceptance, at whatever boundary the caller was guarding.
 
 ## Install
 
 ```sh
-go get github.com/cplieger/pathinside@latest
+go get github.com/cplieger/pathinside/v2@latest
 ```
 
 ## Usage
 
 ### Containment
 
+The root is the side you have exactly one of, decided where the confinement boundary is decided; targets flow past it. Convert it once — the conversion is the whole construction — and judge every target with the method:
+
 ```go
-if !pathinside.Inside(root, event.Name) {
-    slog.Warn("refusing to extend the watch set outside the watched root", "path", event.Name, "root", root)
+root := pathinside.Root(cfg.WatchDir)
+
+if !root.Contains(event.Name) {
+    slog.Warn("refusing to extend the watch set outside the watched root", "path", event.Name, "root", string(root))
     return
 }
 ```
 
-Both arguments are cleaned (`filepath.Rel` cleans base and target itself), so `/a/b/`, `/a/./b` and `/a/x/../b` are all the same root, and a caller that pre-cleans gets the same answer as one that does not. The root itself is inside: `Inside(root, root)` is true, because the tree includes its own root (a scan that starts there, a watch registered on it, an archive's `./` entry). A pair that cannot be compared lexically — an absolute target against a relative root, or two Windows volumes — is refused rather than guessed.
+The root and the target are both cleaned (`filepath.Rel` cleans base and target itself), so `/a/b/`, `/a/./b` and `/a/x/../b` are all the same root, and a caller that pre-cleans gets the same answer as one that does not. The root itself is inside: `Root(p).Contains(p)` is true, because the tree includes its own root (a scan that starts there, a watch registered on it, an archive's `./` entry). A pair that cannot be compared lexically — an absolute target against a relative root, or two Windows volumes — is refused rather than guessed. The zero value `Root("")` contains nothing — an empty root is an unset field, and the fail-open reading (silently confining to the current working directory) is the direction a containment bug must not take; write `Root(".")` when cwd-relative containment is genuinely wanted.
 
 ### Validating a relative name
 
@@ -86,7 +90,8 @@ Both halves are needed, because neither implies the other. `..` and `../dumps` a
 
 | Symbol | Contract |
 | --- | --- |
-| `Inside(root, target string) bool` | Reports whether target is root itself or a path beneath it. Both arguments are cleaned. Lexical: no symlink resolution. A pair `filepath.Rel` cannot compare (absolute against relative, differing Windows volumes) is false. |
+| `Root` | The tree containment is judged against — a plain string conversion, `pathinside.Root("/srv/data")`, made once where the confinement boundary is decided. No validation, no normalization at conversion time: cleaning happens at judgment time. The zero value `Root("")` contains nothing (fail closed); `Root(".")` is the explicit cwd spelling. |
+| `(r Root) Inside(target string) bool` | Reports whether target is the root itself or a path beneath it. Root and target are both cleaned. Lexical: no symlink resolution. A pair `filepath.Rel` cannot compare (absolute against relative, differing Windows volumes) is false. |
 | `RelEscapes(rel string) bool` | Reports whether a relative name leaves the root it is relative to: it IS `..` or begins with `..` plus a separator. `rel` is cleaned first, so a buried traversal (`a/../../etc`) is caught. Says nothing about absoluteness — the caller rejects that. |
 | `HasDotDot(p string) bool` | Reports whether p holds a `..` **component**, examined as written. p is **not** cleaned, so a traversal that would normalize away is still caught. Components come from `filepath.ToSlash(p)` split on `/`, so a backslash counts only on Windows, where it is a separator. `...`, `..extras` and `key..v2` are names, not traversals. |
 | `IsCanonical(p string) bool` | Reports whether p is already in `filepath.Clean` form. Refuses a trailing or doubled separator, a `.` component, a buried traversal, and the empty string. `..` and `../dumps` are canonical — canonicality is not hygiene, so pair it with `HasDotDot`. |
@@ -99,7 +104,19 @@ That is the right answer for a name-level decision (_is this path mine to handle
 
 ## Name validation is stricter than containment
 
-The two containment functions do not always agree, and the disagreement is deliberate. A name that walks out of the root and back into a directory that happens to share the root's name — `../a` under root `a` — is refused by `RelEscapes` while its joined result (the root itself) is `Inside`. `RelEscapes` judges the shape of a **name**; `Inside` judges the location of a **result**. A caller validating an untrusted name wants the strict answer, because a legitimate name has no business leaving. Fusing the two would pick one answer for both callers.
+The two containment predicates do not always agree, and the disagreement is deliberate. A name that walks out of the root and back into a directory that happens to share the root's name — `../a` under root `a` — is refused by `RelEscapes` while its joined result (the root itself) is inside. `RelEscapes` judges the shape of a **name**; `Root.Contains` judges the location of a **result**. A caller validating an untrusted name wants the strict answer, because a legitimate name has no business leaving. Fusing the two would pick one answer for both callers.
+
+## v1 → v2
+
+v2 is one change: the containment predicate moved onto a `Root` type, so the direction of the comparison is fixed once at construction instead of restated — swappably — at every call site. `Inside(root, target)` took two same-typed arguments whose transposition compiled and silently inverted the answer at a security boundary; `Root(root).Contains(target)` makes that transposition a type error.
+
+Update the import path to `github.com/cplieger/pathinside/v2`, then apply one rename:
+
+| v1 | v2 |
+| --- | --- |
+| `pathinside.Inside(root, target)` | `root := pathinside.Root(cfgRoot)` at the boundary, then `root.Contains(target)` per path — construct the Root ONCE where the boundary is decided; the inline one-liner keeps the swap hazard in new spelling |
+
+Everything else is unchanged. `RelEscapes`, `HasDotDot` and `IsCanonical` keep their package-level signatures and contracts — each takes a single path, so there is no pair to swap and no direction to fix, and a type there would be ceremony. Every documented behavior of v1's `Inside` survives on the method: the root itself is inside, both sides are cleaned, the comparison is lexical, an uncomparable pair is false.
 
 ## Unsupported by Design
 
@@ -107,7 +124,7 @@ The two containment functions do not always agree, and the disagreement is delib
 | --- | --- |
 | Symlink resolution | It would turn a pure string predicate into a filesystem call with its own error mode, and still lose the TOCTOU race. `os.Root` is the answer, and it is in the standard library. |
 | A `SafeJoin`-style "validate and join" helper | The refusals a caller owes its user are the caller's: an empty name, an absolute name, and a traversal deserve distinct messages, and a helper that returns one error for all three makes them indistinguishable. Compose `RelEscapes` with `filepath.IsAbs` and `filepath.Join`. |
-| A variant that excludes the root | The one caller that needs it needs a different rule (it rejects equality _and_ wants its own error), and hiding that behind a flag would let a caller pick the wrong containment semantics with one boolean. Test for equality explicitly. |
+| A variant that excludes the root | The one caller that needs it needs a different rule (it rejects equality _and_ wants its own error), and hiding that behind a flag would let a caller pick the wrong containment semantics with one boolean. Keep the equality test at the call site: `r.Contains(target) && filepath.Clean(target) != filepath.Clean(string(r))`. |
 | Case-insensitive or Unicode-normalizing comparison | Case folding and normalization are filesystem properties, not path properties, and getting them wrong in either direction is a security bug. A caller on a case-insensitive filesystem normalizes both paths itself, with its own knowledge of the mount. |
 
 ## Disclaimer

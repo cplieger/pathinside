@@ -1,3 +1,3 @@
-module github.com/cplieger/pathinside
+module github.com/cplieger/pathinside/v2
 
 go 1.26.7

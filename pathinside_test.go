@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/cplieger/pathinside"
+	"github.com/cplieger/pathinside/v2"
 )
 
 // fs turns a slash-written path into this platform's spelling, so the tables
@@ -56,15 +56,33 @@ func TestInside(t *testing.T) {
 		{"dot root, dotfile", ".", fs(".hidden"), true},
 		{"filesystem root contains everything absolute", "/", fs("/etc/passwd"), true},
 		{"filesystem root contains itself", "/", "/", true},
-		{"empty root is the current directory", "", "c", true},
+		{"empty root contains nothing (fail closed)", "", "c", false},
 		{"empty target is the root itself", ".", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := pathinside.Inside(tt.root, tt.target); got != tt.want {
-				t.Errorf("Inside(%q, %q) = %v, want %v", tt.root, tt.target, got, tt.want)
+			if got := pathinside.Root(tt.root).Contains(tt.target); got != tt.want {
+				t.Errorf("Root(%q).Contains(%q) = %v, want %v", tt.root, tt.target, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestRootZeroValue pins the zero-value contract stated on the Root type:
+// Root("") contains NOTHING. An empty root is an unset field or a missed
+// configuration value, and the fail-open alternative (filepath.Rel cleaning ""
+// to ".", silently confining to the current working directory) is the
+// direction a containment bug must not take. Root(".") is the explicit
+// spelling for cwd-relative containment, asserted here to still work.
+func TestRootZeroValue(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{"c", fs("a/b"), ".", "", fs("../x"), "/abs"} {
+		if got := pathinside.Root("").Contains(target); got {
+			t.Errorf(`Root("").Contains(%q) = true, want false: the empty root must contain nothing`, target)
+		}
+	}
+	if !pathinside.Root(".").Contains("c") {
+		t.Error(`Root(".").Contains("c") = false, want true: the explicit cwd spelling must keep working`)
 	}
 }
 
@@ -114,13 +132,13 @@ func TestRelEscapes(t *testing.T) {
 // hardcoded slash so the rule is pinned on whatever platform runs it.
 func TestSeparatorPrecision(t *testing.T) {
 	sep := string(filepath.Separator)
-	root := sep + "srv" + sep + "data"
+	root := pathinside.Root(sep + "srv" + sep + "data")
 
-	if pathinside.Inside(root, root+"-evil") {
-		t.Errorf("Inside(%q, %q) = true, want false: a sibling whose name extends the root's is outside it", root, root+"-evil")
+	if root.Contains(string(root) + "-evil") {
+		t.Errorf("Root(%q).Contains(%q) = true, want false: a sibling whose name extends the root's is outside it", root, string(root)+"-evil")
 	}
-	if !pathinside.Inside(root, root+sep+"..extras") {
-		t.Errorf("Inside(%q, %q) = false, want true: a name beginning with two dots is a name, not a traversal", root, root+sep+"..extras")
+	if !root.Contains(string(root) + sep + "..extras") {
+		t.Errorf("Root(%q).Contains(%q) = false, want true: a name beginning with two dots is a name, not a traversal", root, string(root)+sep+"..extras")
 	}
 	if !pathinside.RelEscapes(".." + sep + "escape") {
 		t.Errorf("RelEscapes(%q) = false, want true", ".."+sep+"escape")
@@ -144,25 +162,27 @@ func TestNonSeparatorByteIsANameOnUnix(t *testing.T) {
 }
 
 // TestNameValidationIsStricterThanContainment pins the deliberate asymmetry
-// between the two functions, and with it the reason they are separate: RelEscapes
-// judges the shape of a NAME, Inside judges the location of a RESULT. A name that
-// walks out of the root and back into a directory with the same name is refused
-// as a name while its joined result is inside the root. A caller validating an
-// untrusted name wants the strict answer; a caller classifying a path it has
-// already been handed wants the locational one.
+// between the two containment predicates, and with it the reason they are
+// separate: RelEscapes judges the shape of a NAME, Root.Contains judges the
+// location of a RESULT. A name that walks out of the root and back into a
+// directory with the same name is refused as a name while its joined result is
+// inside the root. A caller validating an untrusted name wants the strict
+// answer; a caller classifying a path it has already been handed wants the
+// locational one.
 func TestNameValidationIsStricterThanContainment(t *testing.T) {
 	root, rel := "a", fs("../a")
 	if !pathinside.RelEscapes(rel) {
 		t.Errorf("RelEscapes(%q) = false, want true: the name walks out of its root", rel)
 	}
-	if joined := filepath.Join(root, rel); !pathinside.Inside(root, joined) {
-		t.Errorf("Inside(%q, %q) = false, want true: the joined result is the root itself", root, joined)
+	if joined := filepath.Join(root, rel); !pathinside.Root(root).Contains(joined) {
+		t.Errorf("Root(%q).Contains(%q) = false, want true: the joined result is the root itself", root, joined)
 	}
 }
 
-// functions share: for any pair filepath.Rel can compare, Inside is exactly
-// "the relative path does not escape". A future change that tightens one half
-// without the other breaks here.
+// TestInsideAgreesWithRelEscapes pins the relationship the two containment
+// predicates share: for any pair filepath.Rel can compare, Root.Contains is
+// exactly "the relative path does not escape". A future change that tightens
+// one half without the other breaks here.
 func TestInsideAgreesWithRelEscapes(t *testing.T) {
 	pairs := [][2]string{
 		{fs("/a/b"), fs("/a/b")},
@@ -179,8 +199,8 @@ func TestInsideAgreesWithRelEscapes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("filepath.Rel(%q, %q) failed: %v", root, target, err)
 		}
-		if got, want := pathinside.Inside(root, target), !pathinside.RelEscapes(rel); got != want {
-			t.Errorf("Inside(%q, %q) = %v, but RelEscapes(%q) = %v", root, target, got, rel, !want)
+		if got, want := pathinside.Root(root).Contains(target), !pathinside.RelEscapes(rel); got != want {
+			t.Errorf("Root(%q).Contains(%q) = %v, but RelEscapes(%q) = %v", root, target, got, rel, !want)
 		}
 	}
 }
