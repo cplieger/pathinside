@@ -33,7 +33,7 @@ go get github.com/cplieger/pathinside/v2@latest
 
 ### Containment
 
-The root is the side you have exactly one of, decided where the confinement boundary is decided; targets flow past it. Convert it once — the conversion is the whole construction — and judge every target with the method:
+The root is the side you have exactly one of, fixed where the confinement boundary is decided; targets flow past it. Convert it once — the conversion is the whole construction — and judge every target with the method:
 
 ```go
 root := pathinside.Root(cfg.WatchDir)
@@ -44,7 +44,7 @@ if !root.Contains(event.Name) {
 }
 ```
 
-The root and the target are both cleaned (`filepath.Rel` cleans base and target itself), so `/a/b/`, `/a/./b` and `/a/x/../b` are all the same root, and a caller that pre-cleans gets the same answer as one that does not. The root itself is inside: `Root(p).Contains(p)` is true, because the tree includes its own root (a scan that starts there, a watch registered on it, an archive's `./` entry). A pair that cannot be compared lexically — an absolute target against a relative root, or two Windows volumes — is refused rather than guessed. The zero value `Root("")` contains nothing — an empty root is an unset field, and the fail-open reading (silently confining to the current working directory) is the direction a containment bug must not take; write `Root(".")` when cwd-relative containment is genuinely wanted.
+The root and the target are both cleaned (`filepath.Rel` cleans base and target itself), so `/a/b/`, `/a/./b` and `/a/x/../b` are all the same root, and a caller that pre-cleans gets the same answer as one that does not. The root itself is inside: `Root(p).Contains(p)` is true for every non-empty p, because the tree includes its own root (a scan that starts there, a watch registered on it, an archive's `./` entry). A pair that cannot be compared lexically — an absolute target against a relative root, or two Windows volumes — is refused rather than guessed. The zero value `Root("")` contains nothing — an empty root is an unset field, and the fail-open reading (silently confining to the current working directory) is the direction a containment bug must not take; write `Root(".")` when cwd-relative containment is genuinely wanted.
 
 ### Validating a relative name
 
@@ -98,7 +98,7 @@ Both halves are needed, because neither implies the other. `..` and `../dumps` a
 
 ## Lexical, not enforced
 
-All four functions compare **names** and resolve nothing. A symlink inside the root pointing anywhere at all is still lexically inside it, and a path that passes can be swapped between the check and the syscall.
+All four predicates compare **names** and resolve nothing. A symlink inside the root pointing anywhere at all is still lexically inside it, and a path that passes can be swapped between the check and the syscall.
 
 That is the right answer for a name-level decision (_is this path mine to handle_) and the wrong one for an access-level decision (_may this open succeed_). Callers that open, read, write, rename or remove through the path want kernel-enforced confinement — [`os.Root`](https://pkg.go.dev/os#Root) via `os.OpenRoot` / `os.OpenInRoot`, which refuses to traverse a symlink out of the tree and closes the TOCTOU window a lexical check cannot see. The two compose: the cheap lexical gate gives an early, quiet refusal and a clear operator message; the confined handle makes the operation itself safe.
 
@@ -107,18 +107,6 @@ Lexical does not mean byte-exact everywhere, and the exception is **case**. `Roo
 ## Name validation is stricter than containment
 
 The two containment predicates do not always agree, and the disagreement is deliberate. A name that walks out of the root and back into a directory that happens to share the root's name — `../a` under root `a` — is refused by `RelEscapes` while its joined result (the root itself) is inside. `RelEscapes` judges the shape of a **name**; `Root.Contains` judges the location of a **result**. A caller validating an untrusted name wants the strict answer, because a legitimate name has no business leaving. Fusing the two would pick one answer for both callers.
-
-## v1 → v2
-
-v2 is one change: the containment predicate moved onto a `Root` type, so the direction of the comparison is fixed once at construction instead of restated — swappably — at every call site. `Inside(root, target)` took two same-typed arguments whose transposition compiled and silently inverted the answer at a security boundary; `Root(root).Contains(target)` makes that transposition a type error.
-
-Update the import path to `github.com/cplieger/pathinside/v2`, then apply one rename:
-
-| v1 | v2 |
-| --- | --- |
-| `pathinside.Inside(root, target)` | `root := pathinside.Root(cfgRoot)` at the boundary, then `root.Contains(target)` per path — construct the Root ONCE where the boundary is decided; the inline one-liner keeps the swap hazard in new spelling |
-
-Everything else is unchanged. `RelEscapes`, `HasDotDot` and `IsCanonical` keep their package-level signatures and contracts — each takes a single path, so there is no pair to swap and no direction to fix, and a type there would be ceremony. Every documented behavior of v1's `Inside` survives on the method: the root itself is inside, both sides are cleaned, the comparison is lexical, an uncomparable pair is false.
 
 ## Unsupported by Design
 
