@@ -41,8 +41,31 @@ type Root string
 // The root and the target are both cleaned: filepath.Rel cleans base and target
 // itself, so a caller passing filepath.Clean'd paths and one passing raw ones
 // get the same answer, and "/a/b/" , "/a/./b" and "/a/x/../b" are all the same
-// root. Nothing else is normalized — no symlink resolution, no case folding, no
-// Unicode normalization, no conversion between absolute and relative.
+// root. Nothing else is normalized — no symlink resolution, no Unicode
+// normalization, no conversion between absolute and relative.
+//
+// CASE IS THE PLATFORM'S RULE, and it is the one place this method is not
+// byte-exact. filepath.Rel compares path components case-INSENSITIVELY on
+// Windows and byte-exactly on Unix and Plan 9, so Root("/srv/Data").Contains(
+// "/srv/data/x") is false on Linux and true on Windows. Rel's own documentation
+// does not say so, which is why it is said here: a containment boundary cannot
+// afford to inherit a comparison rule it does not know about. This package
+// neither adds that folding nor removes it — reimplementing Rel to force
+// byte-exactness would refuse a Windows caller the very path its filesystem
+// resolves to the root.
+//
+// Two consequences follow, and they point in opposite directions. On Windows the
+// folding is the TOOLCHAIN's simple Unicode case folding, not the volume's own
+// uppercase table, so the two can disagree — and a fold relation that grows
+// makes containment MORE permissive, never less, which is the direction a
+// containment bug takes: a target in a sibling directory starts reading as
+// inside. Go 1.27's Unicode 17 tables fold pairs Go 1.26 held distinct
+// (U+FB05/U+FB06 and the Greek U+0390/U+1FD3, U+03B0/U+1FE3 among them), so
+// Windows containment loosened by exactly those names. The other direction is
+// the reassuring one: [RelEscapes], [HasDotDot] and [IsCanonical] compare
+// against the literal "..", whose runes have no case-fold partners at all, so no
+// fold table on any platform can turn a name into a traversal or a traversal
+// into a name.
 //
 // THE ROOT ITSELF IS CONTAINED. Root(p).Contains(p) is true for every non-empty p, because the
 // question this predicate answers is "may this path be treated as part of the

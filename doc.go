@@ -105,10 +105,23 @@
 // lexical gate in front of it where the caller also wants an early, quiet
 // refusal.
 //
+// Lexical does not mean byte-exact everywhere, and the exception is CASE.
+// [Root.Contains] delegates to filepath.Rel, which compares path components
+// case-insensitively on Windows and byte-exactly on Unix and Plan 9, so
+// containment inherits the platform's rule — Root("/srv/Data").Contains(
+// "/srv/data/x") is false on Linux and true on Windows. On Windows the folding
+// is the toolchain's simple Unicode case folding rather than the volume's own
+// table, and a fold relation that grows loosens containment rather than
+// tightening it, so each Unicode upgrade moves that boundary in the permissive
+// direction (Go 1.27's Unicode 17 tables fold U+FB05/U+FB06 and two Greek pairs
+// that Go 1.26 held distinct). The hygiene predicates are immune on every
+// platform: they compare against the literal "..", whose runes have no case-fold
+// partners.
+//
 // The root itself is inside: Root(p).Contains(p) is true. A caller that must
 // exclude it (an operation whose empty relative name would rewrite the tree's
-// own directory) tests that separately; a false from Inside never means "equal
-// to root".
+// own directory) tests that separately; a false from [Root.Contains] never means
+// "equal to root".
 //
 // Standard library only, zero dependencies.
 package pathinside
