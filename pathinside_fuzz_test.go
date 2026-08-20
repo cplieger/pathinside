@@ -44,6 +44,17 @@ var fuzzPaths = []string{
 	`..\evil`,
 	"/a/b/\x00c",
 	"/a/b/ c ",
+	// The three rune pairs Unicode 17 newly case-folds (Go 1.27); Unicode 15
+	// held each member distinct. They are ordinary names on Unix, where
+	// filepath.Rel compares components byte-exactly, and fold-equal on Windows,
+	// where it compares them with strings.EqualFold — so these are the inputs on
+	// which the Rel-derived oracle below and a hand-rolled byte comparison would
+	// disagree, which is exactly the regression the oracle exists to catch.
+	// TestCaseIsThePlatformsRule states the contract they pin.
+	"/a/\uFB05",
+	"/a/\uFB06",
+	"/a/\u0390",
+	"/a/\u1FD3",
 }
 
 // FuzzInsideMatchesRelOracle drives Root.Contains with arbitrary path pairs and
@@ -195,7 +206,7 @@ func FuzzRelEscapesGovernsJoin(f *testing.F) {
 			return
 		}
 		if !pathinside.Root(root).Contains(joined) {
-			t.Fatalf("RelEscapes(%q) = false but Join(%q, rel) = %q is not Inside the root", rel, root, joined)
+			t.Fatalf("RelEscapes(%q) = false but Join(%q, rel) = %q is not inside the root", rel, root, joined)
 		}
 	})
 }
