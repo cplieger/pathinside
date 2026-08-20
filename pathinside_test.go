@@ -269,6 +269,72 @@ func TestHasDotDotBackslashIsANameOnUnix(t *testing.T) {
 	}
 }
 
+// TestCaseIsThePlatformsRule pins the one place containment is NOT byte-exact,
+// and the reason the doc names it: [pathinside.Root.Contains] delegates to
+// filepath.Rel, whose component comparison is case-insensitive on Windows and
+// byte equality on Unix and Plan 9. So the same pair answers differently by
+// platform, this package neither adds the folding nor removes it, and a caller
+// reading "lexical" as "byte-exact" is wrong on Windows.
+//
+// The three Unicode pairs are the ones Go 1.27 changed: Unicode 17 folds
+// U+FB05/U+FB06, U+0390/U+1FD3 and U+03B0/U+1FE3, which Unicode 15 held
+// distinct. Measured over the whole 15-to-17 jump, the fold relation GAINED
+// pairs and lost none, so the only direction this can move Windows containment
+// is the permissive one — a target in a sibling directory reading as inside,
+// which is what makes it worth a regression guard rather than a footnote. The
+// ASCII row is the control: it folds on Windows in every release, so it isolates
+// what is new from what was always true.
+func TestCaseIsThePlatformsRule(t *testing.T) {
+	folded := runtime.GOOS == "windows"
+	tests := []struct {
+		name   string
+		root   string
+		target string
+	}{
+		{"ASCII case (folded on Windows in every release)", fs("/srv/Data"), fs("/srv/data/x")},
+		{"U+FB05 against U+FB06 (newly folded in Unicode 17)", fs("/srv/\uFB05"), fs("/srv/\uFB06/x")},
+		{"U+0390 against U+1FD3 (newly folded in Unicode 17)", fs("/srv/\u0390"), fs("/srv/\u1FD3/x")},
+		{"U+03B0 against U+1FE3 (newly folded in Unicode 17)", fs("/srv/\u03B0"), fs("/srv/\u1FE3/x")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathinside.Root(tt.root).Contains(tt.target); got != folded {
+				t.Errorf("Root(%q).Contains(%q) = %v, want %v on %s", tt.root, tt.target, got, folded, runtime.GOOS)
+			}
+		})
+	}
+}
+
+// TestHygieneIsFoldIndependent pins the other half of the case audit, and it
+// holds on every platform: [pathinside.RelEscapes], [pathinside.HasDotDot] and
+// [pathinside.IsCanonical] compare against the literal "..", whose runes have no
+// case-fold partners at all, so no fold table can turn a name into a traversal
+// or a traversal into a name. A rune that Unicode 17 newly folds is an ordinary
+// filename byte sequence to all three, and a real traversal beside it is still
+// found.
+func TestHygieneIsFoldIndependent(t *testing.T) {
+	t.Parallel()
+	for _, p := range []string{"\uFB05", "\uFB06", "\u0390", "\u1FD3", fs("/srv/\uFB05/movie.mkv")} {
+		if pathinside.RelEscapes(p) {
+			t.Errorf("RelEscapes(%q) = true, want false: a newly-folding rune is a name, not a traversal", p)
+		}
+		if pathinside.HasDotDot(p) {
+			t.Errorf("HasDotDot(%q) = true, want false: a newly-folding rune is a name, not a traversal", p)
+		}
+		if !pathinside.IsCanonical(p) {
+			t.Errorf("IsCanonical(%q) = false, want true: a newly-folding rune needs no cleaning", p)
+		}
+	}
+	for _, p := range []string{fs("../\uFB05"), fs("/srv/\uFB06/../etc")} {
+		if !pathinside.HasDotDot(p) {
+			t.Errorf("HasDotDot(%q) = false, want true: a traversal beside a folding rune is still a traversal", p)
+		}
+	}
+	if !pathinside.RelEscapes(fs("../\uFB05")) {
+		t.Errorf("RelEscapes(%q) = false, want true", fs("../\uFB05"))
+	}
+}
+
 // TestIsCanonical pins the other hygiene predicate: canonical means cleaning
 // would change nothing, so the whole class of spellings a later normalization
 // would silently rewrite — a trailing separator, a doubled separator, a "."
