@@ -24,6 +24,17 @@ import (
 // filepath.Rel at judgment time, so Root("/a/b/"), Root("/a/./b") and
 // Root("/a/b") judge every target identically.
 //
+// They cost differently, though, and a long-lived Root is where that shows.
+// Because the cleaning happens per judgment rather than once at conversion, a
+// root whose spelling forces filepath.Clean to REWRITE it pays for that rewrite
+// on every target it judges, for as long as the value lives. Measured: a clean
+// root and a trailing-separator root judge a target for zero allocations, while
+// Root("/srv/./data") costs two on every call — a dot component makes Clean
+// build a new string, where a trailing separator only truncates and returns a
+// substring. Prefer storing a filepath.Clean'd root when the value comes from
+// configuration and will judge many paths; the answers are identical either
+// way, so this is a cost note and never a correctness one.
+//
 // The zero value Root("") CONTAINS NOTHING: every Contains answer is false.
 // An empty root is almost always an unset field or a missed configuration
 // value, and the fail-open alternative — filepath.Rel cleans "" to ".",
