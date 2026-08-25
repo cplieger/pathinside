@@ -1,6 +1,6 @@
 window.BENCHMARK_DATA = {
   "lastUpdate": 1787698491760,
-  "repoUrl": "https://github.com/cplieger/ci",
+  "repoUrl": "https://github.com/cplieger/pathinside",
   "entries": {
     "Benchmark": [
       {
@@ -15,10 +15,10 @@ window.BENCHMARK_DATA = {
             "username": "web-flow",
             "email": "noreply@github.com"
           },
-          "id": "22ecb93b0586a9d799b745b0b5f7c2a5da2fe072",
-          "message": "chore(deps): update cplieger/ci digest to f04eff4 (#512)",
-          "timestamp": "2026-08-25T08:02:03Z",
-          "url": "https://github.com/cplieger/ci/commit/22ecb93b0586a9d799b745b0b5f7c2a5da2fe072"
+          "id": "e898450afd9c69b3122826bb79a5aa8dc6e6ecc5",
+          "message": "chore(sync): synced file(s) with cplieger/ci (#77)\n\nCo-authored-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-25T08:10:01Z",
+          "url": "https://github.com/cplieger/pathinside/commit/e898450afd9c69b3122826bb79a5aa8dc6e6ecc5"
         },
         "date": 1787698491299,
         "tool": "customSmallerIsBetter",
