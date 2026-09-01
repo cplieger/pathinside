@@ -151,29 +151,21 @@ func FuzzInsideRejectsPrefixSibling(f *testing.F) {
 	})
 }
 
-// FuzzRelEscapesGovernsJoin pins the safety direction of the relationship
-// between the two containment predicates over arbitrary inputs: a RELATIVE name
-// RelEscapes accepts always lands INSIDE the root it is joined onto. That is the
-// contract a caller leans on when it validates a name first (an archive entry, a
-// configured sub-path) and joins it afterwards — the validation has to be at
-// least as strict as the containment check that would judge the result, or a
-// name can pass the gate and land outside.
+// FuzzRelEscapesGovernsJoin pins the safety direction between the two
+// containment predicates: a RELATIVE name RelEscapes accepts always lands
+// INSIDE the root it is joined onto. That is the contract a caller leans on
+// when it validates a name first and joins it afterwards.
 //
-// The converse is deliberately NOT asserted, because it is false, and
-// TestNameValidationIsStricterThanContainment pins the counterexample: a name
-// that walks out of the root and back into a directory with the same name
-// ("../a" under root "a") is refused by RelEscapes and still lands inside. The
-// two predicates answer different questions — one about the shape of a NAME, one
-// about the location of a RESULT — which is why the package keeps them apart.
+// The converse is deliberately NOT asserted, because it is false —
+// TestNameValidationIsStricterThanContainment pins the counterexample ("../a"
+// under root "a"): the two predicates answer different questions, one about
+// the shape of a NAME, one about the location of a RESULT.
 //
-// The accepted direction is restricted to non-absolute names, and that
-// restriction is the documented hazard rather than a convenience: an ABSOLUTE
-// name is not judged by RelEscapes at all, and joining one onto a relative root
-// can even move ABOVE that root, because filepath.Clean clamps a traversal at
-// the filesystem root ("/.." is "/") and filepath.Join then re-attaches the
-// unclamped traversal to a relative base — Join("data", "/..") is ".". A caller
-// validating an untrusted name must reject absoluteness itself; the fuzzer found
-// this pair, and it is why the RelEscapes doc says so.
+// The accepted direction is restricted to non-absolute names: an ABSOLUTE name
+// is not judged by RelEscapes at all, and joining one onto a relative root can
+// move ABOVE that root (see [pathinside.RelEscapes]'s doc for the Clean/Join
+// asymmetry this exploits). A caller validating an untrusted name must reject
+// absoluteness itself.
 func FuzzRelEscapesGovernsJoin(f *testing.F) {
 	for _, root := range fuzzPaths {
 		for _, rel := range fuzzPaths {
@@ -220,29 +212,20 @@ func isFilesystemRoot(p string) bool {
 }
 
 // FuzzHasDotDotSurvivesCleaning pins the invariant that makes HasDotDot safe to
-// pair with normalization: if a path was NOT written with a ".." component, then
-// cleaning it cannot produce one. filepath.Clean only drops and merges
-// components, it never invents them, so a caller that gates on HasDotDot and
-// hands the cleaned value onward can never be given a traversal the gate did not
-// see. That is the direction this target proves over arbitrary input; the unit
-// tables prove the other one, that a traversal cleaning would REMOVE is still
-// reported.
+// pair with normalization: if a path was NOT written with a ".." component,
+// cleaning it cannot produce one, because filepath.Clean only drops and merges
+// components, never invents them. The unit tables prove the converse — that a
+// traversal cleaning would REMOVE is still reported.
 //
 // Each input is also checked against an INDEPENDENT component oracle: a manual
-// byte scan that splits on os.IsPathSeparator rather than on
-// strings.SplitSeq(filepath.ToSlash(p), "/"). The two agree on both platforms —
-// os.IsPathSeparator accepts "\" only on Windows, which is precisely when
-// ToSlash rewrites it — so the oracle is a genuine second opinion rather than a
-// restatement, and it fails on each of the three wrong spellings the doc comment
-// names: strings.Contains(p, "..") disagrees on every ordinary name holding two
-// adjacent dots ("key..v2", "/dumps/a..b"), a split on both separator characters
-// disagrees on every legal Unix filename containing a backslash, and a version
-// that cleaned p first — the fusion of the two axes this package exists to
-// prevent — disagrees on every input whose traversal normalizes away.
+// byte scan on os.IsPathSeparator rather than strings.SplitSeq(filepath.ToSlash(p),
+// "/"). The two agree on both platforms, so this is a genuine second opinion:
+// it fails on strings.Contains(p, "..") (wrong on "key..v2"), a split on both
+// separator characters (wrong on a Unix filename containing a backslash), and
+// a version that cleaned p first (the fusion this package exists to prevent).
 //
-// The committed seeds carry the axis-disagreement rows from
-// TestAxesDisagreeOnUncleanInput, since those are the inputs the two axes answer
-// differently and therefore the ones a fusion regression would break first.
+// Seeds include the axis-disagreement rows from TestAxesDisagreeOnUncleanInput,
+// the inputs a fusion regression would break first.
 //
 // Purely lexical: nothing here builds a real path out of fuzz input.
 func FuzzHasDotDotSurvivesCleaning(f *testing.F) {

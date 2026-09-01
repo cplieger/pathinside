@@ -14,12 +14,7 @@ func fs(p string) string {
 	return filepath.FromSlash(p)
 }
 
-// TestInside pins the containment contract: the root itself is inside, a real
-// descendant is inside, a sibling whose name merely extends the root's is NOT
-// (the case a strings.HasPrefix test accepts), a traversal out of the root is
-// not, a name that merely begins with two dots still is, and a pair that cannot
-// be compared lexically (absolute against relative) is refused rather than
-// guessed.
+// TestInside pins the containment contract documented on [pathinside.Root.Contains].
 func TestInside(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -68,12 +63,7 @@ func TestInside(t *testing.T) {
 	}
 }
 
-// TestRootZeroValue pins the zero-value contract stated on the Root type:
-// Root("") contains NOTHING. An empty root is an unset field or a missed
-// configuration value, and the fail-open alternative (filepath.Rel cleaning ""
-// to ".", silently confining to the current working directory) is the
-// direction a containment bug must not take. Root(".") is the explicit
-// spelling for cwd-relative containment, asserted here to still work.
+// TestRootZeroValue pins the zero-value contract stated on the [pathinside.Root] type.
 func TestRootZeroValue(t *testing.T) {
 	t.Parallel()
 	for _, target := range []string{"c", fs("a/b"), ".", "", fs("../x"), "/abs"} {
@@ -86,10 +76,7 @@ func TestRootZeroValue(t *testing.T) {
 	}
 }
 
-// TestRelEscapes pins the relative-name half on its own: the exact ".." and a
-// separator-led traversal escape, a name that merely begins with two dots does
-// not, an uncleaned name whose traversal is buried mid-string still does, and an
-// absolute path does NOT escape by this test (the caller owns that refusal).
+// TestRelEscapes pins the contract documented on [pathinside.RelEscapes].
 func TestRelEscapes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -161,14 +148,8 @@ func TestNonSeparatorByteIsANameOnUnix(t *testing.T) {
 	}
 }
 
-// TestNameValidationIsStricterThanContainment pins the deliberate asymmetry
-// between the two containment predicates, and with it the reason they are
-// separate: RelEscapes judges the shape of a NAME, Root.Contains judges the
-// location of a RESULT. A name that walks out of the root and back into a
-// directory with the same name is refused as a name while its joined result is
-// inside the root. A caller validating an untrusted name wants the strict
-// answer; a caller classifying a path it has already been handed wants the
-// locational one.
+// TestNameValidationIsStricterThanContainment pins the asymmetry documented on
+// [pathinside.RelEscapes] ("deliberately stricter than Root.Contains").
 func TestNameValidationIsStricterThanContainment(t *testing.T) {
 	root, rel := "a", fs("../a")
 	if !pathinside.RelEscapes(rel) {
@@ -205,12 +186,7 @@ func TestInsideAgreesWithRelEscapes(t *testing.T) {
 	}
 }
 
-// TestHasDotDot pins the hygiene half: a ".." COMPONENT counts wherever it sits
-// — first, last, or buried mid-path where cleaning would have hidden it — and
-// nothing that merely contains or begins with two dots does. The unclean
-// spellings are the point of the function rather than an edge case: the path is
-// examined AS WRITTEN, so a traversal that would normalize away is still
-// reported. The empty string has no components and is false.
+// TestHasDotDot pins the contract documented on [pathinside.HasDotDot].
 func TestHasDotDot(t *testing.T) {
 	tests := []struct {
 		name string
@@ -269,21 +245,10 @@ func TestHasDotDotBackslashIsANameOnUnix(t *testing.T) {
 	}
 }
 
-// TestCaseIsThePlatformsRule pins the one place containment is NOT byte-exact,
-// and the reason the doc names it: [pathinside.Root.Contains] delegates to
-// filepath.Rel, whose component comparison is case-insensitive on Windows and
-// byte equality on Unix and Plan 9. So the same pair answers differently by
-// platform, this package neither adds the folding nor removes it, and a caller
-// reading "lexical" as "byte-exact" is wrong on Windows.
-//
-// The three Unicode pairs are the ones Go 1.27 changed: Unicode 17 folds
-// U+FB05/U+FB06, U+0390/U+1FD3 and U+03B0/U+1FE3, which Unicode 15 held
-// distinct. Measured over the whole 15-to-17 jump, the fold relation GAINED
-// pairs and lost none, so the only direction this can move Windows containment
-// is the permissive one — a target in a sibling directory reading as inside,
-// which is what makes it worth a regression guard rather than a footnote. The
-// ASCII row is the control: it folds on Windows in every release, so it isolates
-// what is new from what was always true.
+// TestCaseIsThePlatformsRule pins the case-fold contract documented on
+// [pathinside.Root.Contains]. The three Unicode pairs are the ones Go 1.27
+// changed (Unicode 17 folds U+FB05/U+FB06, U+0390/U+1FD3, U+03B0/U+1FE3); the
+// ASCII row is the control, folding on Windows in every release.
 func TestCaseIsThePlatformsRule(t *testing.T) {
 	folded := runtime.GOOS == "windows"
 	tests := []struct {
@@ -335,16 +300,8 @@ func TestHygieneIsFoldIndependent(t *testing.T) {
 	}
 }
 
-// TestIsCanonical pins the other hygiene predicate: canonical means cleaning
-// would change nothing, so the whole class of spellings a later normalization
-// would silently rewrite — a trailing separator, a doubled separator, a "."
-// component, a traversal buried mid-path — is refused in one test, and the empty
-// string (which cleans to ".") is refused with them.
-//
-// The load-bearing rows are ".." and "../dumps", which are TRUE. They are
-// perfectly canonical while still traversing, which is why canonicality is not
-// hygiene and why a validating caller needs the OR of both predicates
-// (!IsCanonical(p) || HasDotDot(p)) rather than either alone.
+// TestIsCanonical pins the contract documented on [pathinside.IsCanonical].
+// The load-bearing rows are ".." and "../dumps": canonical yet traversing.
 func TestIsCanonical(t *testing.T) {
 	tests := []struct {
 		name string
