@@ -9,72 +9,29 @@ import (
 	"github.com/cplieger/pathinside/v2"
 )
 
-// This file exists because pathinside SELLS a cost claim, and until this landed
-// nothing in the repo measured it. The README's whole pitch is that these are
-// "two lexical path questions": a "cheap lexical gate" that "compares names and
-// resolves nothing", with the hygiene axis judging a path "AS WRITTEN" and
-// never cleaning it. Those are not only behaviour claims. A purely lexical
-// judgment that allocates nothing is a different product from one that calls
-// filepath.Clean and hands back a fresh string on every call, and this library is
-// adopted across the fleet at call sites that run once per path on file-handling
-// paths — so a per-call allocation here multiplies by the fleet's file count.
+// This file gates the package's cost claim (a lexical judgment that allocates
+// nothing) rather than just its trend: TestXxxAllocations asserts
+// testing.AllocsPerRun == 0 on measured-zero input classes, so a regression
+// fails at merge time; the Benchmark functions feed the weekly trend tracker.
 //
-// Two kinds of check, doing different jobs:
+// Measured findings, so a re-run is not needed to rediscover them:
+//   - HasDotDot never calls filepath.Clean and is allocation-free on every
+//     input class at every depth.
+//   - RelEscapes and IsCanonical are allocation-free on canonical input and
+//     allocate 2 when Clean must rewrite (Clean returns a substring of its
+//     argument when the result is a prefix of the input).
+//   - Root.Contains is allocation-free on its accept path at every depth and
+//     allocates on every refusal (Rel builds a "../.." ladder or an error
+//     message), so the expensive path is the one an attacker picks.
+//   - Containment has no cheap refusal: diverging at the first component vs.
+//     the last cost within a few percent of each other, because Rel's early
+//     break still copies the whole remaining target into its result. HasDotDot
+//     diverges by ~600x between the same two positions, which is why the
+//     hygiene predicate is the cheap way to ask whether a name traverses.
 //
-//   - The TestXxxAllocations tests GATE the measured contract. testing.AllocsPerRun
-//     is exact, so each assertion is `== 0` against an input class that was
-//     measured at zero, not a threshold. A later refactor that slips a
-//     filepath.Clean, a strings.Split or an fmt call into one of these
-//     predicates goes red at merge time instead of drifting into a chart.
-//   - The Benchmark functions feed the weekly benchmark tracker with a trend
-//     series. The ones that carry a depth ladder are size-parameterised so an
-//     accidentally quadratic walk shows up as a super-linear jump between rungs
-//     rather than a uniform slowdown that reads as runner noise.
-//
-// The division of labour between them is deliberate. PER-INPUT precision lives
-// in the AllocsPerRun tables, which are cheap enough to enumerate every
-// adversarial spelling (`..` at each position, all-separators, a trailing
-// separator, target equal to root, an unclean root). The time series covers only
-// the input classes that actually decide cost, because each b.Run name becomes a
-// permanent chart series and each one costs a second of every weekly run — the
-// tracker samples at -count=10, so the 17 series here are ~20s locally and ~3.5
-// minutes there. A row earns a series by catching something the others cannot;
-// where two rows would track each other, the comment says so and keeps one.
-//
-// WHAT THE MEASUREMENT FOUND, so the next reader does not have to re-derive it:
-//
-//   - HasDotDot is genuinely allocation-free on every input class measured, at
-//     every depth. It is the only one of the four that never touches
-//     filepath.Clean, and it is the one the hygiene claim rests on.
-//   - RelEscapes and IsCanonical are allocation-free on CANONICAL input and
-//     allocate 2 when filepath.Clean has to rewrite the path. Clean returns a
-//     substring of its argument whenever the cleaned result is a prefix of the
-//     input, so it needs no buffer for canonical input — nor, as it happens, for
-//     a purely truncating clean such as a trailing separator. That second half is
-//     a lazybuf implementation detail rather than a contract, so it is recorded
-//     here and deliberately NOT asserted below.
-//   - Root.Contains is allocation-free on its ACCEPT path at every depth, and
-//     allocates on every REFUSAL. filepath.Rel returns "." for target-equals-root
-//     and a substring of the target for a descendant, but builds a fresh
-//     "../.." ladder for an escape and a fresh error message for an
-//     uncomparable pair. The cheap path is the one a legitimate caller takes and
-//     the expensive path is the one an attacker picks, which is worth knowing
-//     even though the cost is bounded (asserted below).
-//   - There is NO cheap refusal on the containment axis. Diverging from the root
-//     at the FIRST component and diverging at the LAST cost within a few percent
-//     of each other on paths of the same length (5631 ns against 5851 ns in one
-//     run; the ratio is the durable part, the nanoseconds are one machine).
-//     filepath.Rel's comparison loop does break early, and then copies the whole
-//     remaining target into its "../.." result, so the early-out moves the work
-//     rather than avoiding it, and a caller cannot route hostile input down a
-//     cheaper branch. HasDotDot is the opposite — the same move costs a factor of
-//     ~600 there — which is a second reason the hygiene predicate is the cheap way
-//     to ask whether a name traverses.
-//
-// Every fixture is built at package scope, outside the measured closures. A
-// strings.Repeat or a `+` inside an AllocsPerRun closure measures the fixture
-// rather than the function under test; the first draft of the probe behind this
-// file reported HasDotDot allocating once per call for exactly that reason.
+// Every fixture is built at package scope, outside the measured closures — a
+// strings.Repeat or `+` inside an AllocsPerRun closure measures the fixture,
+// not the function under test.
 
 // Depths for the size ladders. Each rung is 16x the previous, so a walk that
 // became quadratic reports ~256x instead of ~16x between rungs — visible past

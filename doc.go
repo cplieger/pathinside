@@ -2,126 +2,33 @@
 //
 // CONTAINMENT needs a root and asks where a path points: is this cleaned target
 // the same as this root, or beneath it? [Root.Contains] and [RelEscapes] answer
-// it.
+// it; see [Root.Contains] for why a separator-precise filepath.Rel test beats
+// both strings.HasPrefix and a leading-".." string test, and why the root is a
+// distinct type rather than a second same-typed parameter.
 //
 // SYNTACTIC HYGIENE needs no root and asks how a path is written: does it spell
-// a traversal, is it in cleaned form? [HasDotDot] and [IsCanonical] answer that.
+// a traversal, is it in cleaned form? [HasDotDot] and [IsCanonical] answer that;
+// see [HasDotDot] for the separator rule and why a substring test is wrong.
 //
-// The axes are separate because they disagree, and they disagree on the inputs
-// that matter. Containment cleans first, so a traversal that normalizes away is
-// not an escape — "/run/secrets/../../etc/shadow" cleans to "/etc/shadow", which
-// leaves no root and passes. Hygiene never cleans, so the same path fails, on the
-// grounds that a legitimate credential path was not written with two traversals
-// in it. Answering a hygiene question with a containment function is therefore
-// not a near-miss but an inversion: the refusal becomes an acceptance, at
-// whatever boundary the caller was guarding.
+// The axes disagree on unclean input, which is precisely what an attacker
+// supplies: containment cleans first, so "/run/secrets/../../etc/shadow" cleans
+// to "/etc/shadow" and passes; hygiene never cleans, so the same path fails.
+// Answering a hygiene question with a containment function is therefore not a
+// near-miss but an inversion — a refusal becomes an acceptance. Canonicality
+// bounds the disagreement: filepath.Clean leaves ".." only at the front of a
+// relative path, so on canonical input the two axes always agree.
 //
-// # Containment
+// All four predicates are LEXICAL: they compare and inspect names and resolve
+// nothing, so a symlink inside the root is still lexically inside it. That is
+// the right answer for a name-level decision and the wrong one for an
+// access-level one; callers that open, read, write, rename or remove through
+// the path also want kernel-enforced confinement (os.Root's OpenRoot /
+// OpenInRoot).
 //
-// Every program that hands an externally-influenced path to the filesystem needs
-// that answer somewhere — an archive entry name before extraction, a
-// filesystem-event path before it extends a watch set, a request-supplied file
-// path before it is read or deleted, a path read back out of a log the program
-// wrote earlier. The correct lexical rule is short, and the shapes that are
-// nearly it are wrong in ways that do not show up in a passing test:
-//
-//   - strings.HasPrefix(target, root) accepts a SIBLING whose name merely
-//     starts with the root's: with root "/srv/data", the path "/srv/data-evil"
-//     passes the prefix test and is not inside anything. Appending a separator
-//     to the root before the prefix test fixes that one case and introduces
-//     another (it now rejects the root itself, and it answers on unclean input
-//     the way its author's examples never did).
-//   - filepath.Rel plus a leading-".." STRING test refuses the legitimate name
-//     "..extras/movie.mkv", whose first segment happens to begin with two dots.
-//
-// The rule that is right on both counts is filepath.Rel followed by a
-// SEPARATOR-PRECISE test of the result: the relative path escapes exactly when
-// it is ".." or begins with ".." followed by a separator. Rel is what defeats
-// the prefix sibling — Rel("/srv/data", "/srv/data-evil") is "../data-evil", so
-// the target is reached by leaving the root, which is what "outside" means —
-// and the separator is what keeps "..extras" a name rather than a traversal.
-//
-// [Root.Contains] is that rule. The root is a [Root] — a plain string conversion,
-// made once where the confinement boundary is decided — and every target is
-// judged against it by the method, so the direction of the comparison is fixed
-// at construction rather than restated, swappably, at each call site: the two
-// sides of a containment question are not interchangeable, and handing them to
-// a function as two same-typed parameters let a transposition compile and
-// invert the answer. [RelEscapes] is the rule's second half on its own, for a
-// caller that must validate a relative NAME before joining it onto anything, or
-// that already holds a filepath.Rel result it needs for other work (an
-// os.Root-relative Stat or Remove) and should not pay for a second Rel. Name
-// validation stays a separate question from containment on purpose: the two are
-// asked at different moments, and they do not always agree. RelEscapes is the
-// stricter of the two — a name that leaves the root and returns to a directory
-// with the same name ("../a" under root "a") is refused as a name while its
-// joined result is inside — and a caller validating an untrusted name wants that
-// strictness, because a legitimate name has no business leaving. Fusing them
-// would pick one answer for both callers.
-//
-// Only the containment predicate is a method, because only it has a root and a
-// direction. [RelEscapes], [HasDotDot] and [IsCanonical] are package-level
-// functions taking a single path: there is no pair to swap and no side to fix,
-// so a type there would be ceremony.
-//
-// # Syntactic hygiene
-//
-// The commoner question in practice has no root at all. A credential path, a
-// backup destination, a cache directory read from a config file or a flag is
-// judged on its own: it was meant to be written plainly, and a traversal in it is
-// a red flag whatever it resolves to. [HasDotDot] is that test — does p contain a
-// ".." COMPONENT, as written, without cleaning — and [IsCanonical] is its
-// companion, whether p is already in filepath.Clean form. The composed rule most
-// such callers want is the OR of the two: !IsCanonical(p) || HasDotDot(p) refuses
-// a path that is either unclean or traversing.
-//
-// Both halves are needed, because neither implies the other. ".." and "../dumps"
-// are perfectly canonical, so a canonicality test alone accepts a leading
-// traversal; and "/dumps/../etc" is traversing while "/dumps/a..b" and "key..v2"
-// are ordinary names, so the traversal test must be component-precise rather than
-// a substring search. Canonicality is what BOUNDS the disagreement between the
-// axes: filepath.Clean leaves ".." components only at the front of a relative
-// path, so on canonical input HasDotDot and RelEscapes always agree, and they
-// diverge only on unclean input — the input an attacker supplies.
-//
-// The separator handling in [HasDotDot] is the part worth centralizing. It
-// splits filepath.ToSlash(p) on "/", so a backslash counts as a separator only
-// on Windows, where it is one: on Unix `a\..\b` is a single legal filename and
-// must not read as traversal, on Windows it is three components and must. A
-// hand-rolled split on both characters is wrong on Unix, a split on
-// filepath.Separator alone is wrong on Windows, and strings.Contains(p, "..") is
-// wrong everywhere.
-//
-// # Lexical, not enforced
-//
-// All four predicates are LEXICAL. They compare and inspect names and resolve
-// nothing: a symlink inside the root pointing anywhere at all is still lexically
-// inside it, and a path that passes can still be swapped between the check and
-// the syscall. That is the right answer for a name-level decision (is this path
-// mine to handle) and the wrong one for an access-level decision (may this open
-// succeed). Callers that open, read, write, rename or remove through the path
-// want kernel-enforced confinement — os.Root's os.OpenRoot / os.OpenInRoot,
-// which refuse to traverse a symlink out of the tree — with this package's cheap
-// lexical gate in front of it where the caller also wants an early, quiet
-// refusal.
-//
-// Lexical does not mean byte-exact everywhere, and the exception is CASE.
-// [Root.Contains] delegates to filepath.Rel, which compares path components
-// case-insensitively on Windows and byte-exactly on Unix and Plan 9, so
-// containment inherits the platform's rule — Root("/srv/Data").Contains(
-// "/srv/data/x") is false on Linux and true on Windows. On Windows the folding
-// is the toolchain's simple Unicode case folding rather than the volume's own
-// table, and a fold relation that grows loosens containment rather than
-// tightening it, so each Unicode upgrade moves that boundary in the permissive
-// direction (Go 1.27's Unicode 17 tables fold U+FB05/U+FB06 and two Greek pairs
-// that Go 1.26 held distinct). The hygiene predicates are immune on every
-// platform: they compare against the literal "..", whose runes have no case-fold
-// partners.
-//
-// The root itself is inside: Root(p).Contains(p) is true. A caller that must
-// exclude it (an operation whose empty relative name would rewrite the tree's
-// own directory) tests that separately; a false from [Root.Contains] never means
-// "equal to root".
+// Lexical does not mean byte-exact everywhere: [Root.Contains] inherits
+// filepath.Rel's platform case-fold rule (see its doc comment). The hygiene
+// predicates are immune on every platform — they compare against the literal
+// "..", which has no case-fold partners.
 //
 // Standard library only, zero dependencies.
 package pathinside
