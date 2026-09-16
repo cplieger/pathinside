@@ -1,6 +1,6 @@
 window.BENCHMARK_DATA = {
   "lastUpdate": 1789518380720,
-  "repoUrl": "https://github.com/cplieger/ci",
+  "repoUrl": "https://github.com/cplieger/pathinside",
   "entries": {
     "Benchmark": [
       {
@@ -1152,10 +1152,10 @@ window.BENCHMARK_DATA = {
             "username": "web-flow",
             "email": "noreply@github.com"
           },
-          "id": "d34f4d66d9b0502ee912cd650306671ec71ff3d9",
-          "message": "chore(deps): update benchmark-action/github-action-benchmark action to v1.22.2 (#615)",
-          "timestamp": "2026-09-15T11:02:29Z",
-          "url": "https://github.com/cplieger/ci/commit/d34f4d66d9b0502ee912cd650306671ec71ff3d9"
+          "id": "51d06c3dc9aadb4a03964b040b8b534b6919a6bd",
+          "message": "chore(sync): synced file(s) with cplieger/ci (#129)\n\nCo-authored-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-15T11:11:27Z",
+          "url": "https://github.com/cplieger/pathinside/commit/51d06c3dc9aadb4a03964b040b8b534b6919a6bd"
         },
         "date": 1789518380413,
         "tool": "customSmallerIsBetter",
