@@ -2,9 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/pathinside/v2.svg)](https://pkg.go.dev/github.com/cplieger/pathinside/v2)
 [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/pathinside)](https://github.com/cplieger/pathinside/blob/main/go.mod)
-[![Test coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/pathinside/badges/coverage.json)](https://github.com/cplieger/pathinside/actions/workflows/coverage.yml)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13882/badge)](https://www.bestpractices.dev/projects/13882)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/pathinside/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/pathinside)
+[![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/pathinside/badges/mutation.json)](https://github.com/cplieger/pathinside/issues?q=label%3Agremlins-tracker)
 
 > Is this cleaned path the same as this root, or beneath it? Was it written plainly at all? Two lexical path questions, spelled correctly
 
