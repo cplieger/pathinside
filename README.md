@@ -2,22 +2,20 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/pathinside/v2.svg)](https://pkg.go.dev/github.com/cplieger/pathinside/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/pathinside)](https://github.com/cplieger/pathinside/blob/main/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/pathinside/badges/mutation.json)](https://github.com/cplieger/pathinside/issues?q=label%3Agremlins-tracker)
 
-> Is this cleaned path the same as this root, or beneath it? Was it written plainly at all? Two lexical path questions, spelled correctly
+pathinside catches path traversal in Go by checking that an untrusted path stays inside its root, and that a path from a config file was written without `..`.
 
-Every program that hands an externally-influenced path to the filesystem needs the containment answer somewhere: an archive entry name before extraction, a filesystem-event path before it extends a watch set, a request-supplied path before it is read or deleted, a path read back out of a log the program wrote earlier. The rule is four lines. The shapes that are nearly it are wrong in ways a passing test does not show:
+It replaces the `strings.HasPrefix` or `filepath.Rel` check you would otherwise write before an archive entry, a request path or a file-watcher event reaches the filesystem. It reads names only and never touches the disk. It uses only the standard library, needs Go 1.27.1 or later and is licensed under Apache-2.0.
 
-- `strings.HasPrefix(target, root)` accepts a **sibling** whose name merely starts with the root's. With root `/srv/data`, the path `/srv/data-evil` passes and is not inside anything. Appending a separator to the root before the prefix test fixes that case and breaks another: it now rejects the root itself, and it answers differently on unclean input than its author's examples suggest.
-- `filepath.Rel` plus a leading-`..` **string** test refuses the legitimate name `..extras/movie.mkv`, whose first segment happens to begin with two dots.
+## Why use it
 
-The rule that is right on both counts is `filepath.Rel` followed by a **separator-precise** test of the result: the relative path escapes exactly when it is `..` or begins with `..` followed by a separator. `Rel` is what defeats the prefix sibling: `Rel("/srv/data", "/srv/data-evil")` is `../data-evil`, so the target is reached by _leaving_ the root, which is what "outside" means. The separator is what keeps `..extras` a name rather than a traversal.
+pathinside is built for code that receives a path from outside and must decide whether that path belongs inside its boundary before using it.
 
-Standard library only, zero dependencies.
+- `Root.Contains` refuses `/srv/data-evil` under root `/srv/data`, a sibling that a `strings.HasPrefix` test accepts.
+- `RelEscapes` refuses `../x` and `a/../../etc`, and accepts the ordinary name `..extras/movie.mkv`.
+- `HasDotDot` and `IsCanonical` judge a path as written, so they refuse `/run/secrets/../../etc/shadow` even though it cleans to a path with no `..`.
+- An empty root contains nothing, and a pair it cannot compare, such as an absolute path against a relative root, is refused.
 
-## Two axes
-
-**Containment** needs a root and asks where a path points (`Root.Contains`, `RelEscapes`). **Hygiene** needs no root and asks how a path is written (`HasDotDot`, `IsCanonical`). Pick by whether you have a root: an archive entry about to be joined onto an extraction directory is containment; a credential path, a backup destination or a cache directory read from a config file or a flag is hygiene.
-
-The axes are separate because they disagree, and they disagree on the inputs that matter. Containment cleans first, so a traversal that normalizes away is not an escape: `/run/secrets/../../etc/shadow` cleans to `/etc/shadow`, leaves no root, and `RelEscapes` reports `false`. Hygiene never cleans, so `HasDotDot` reports `true`; a legitimate credential path was not written with two traversals in it. Answering a hygiene question with a containment function is therefore not a near-miss but an inversion: the refusal becomes an acceptance, at whatever boundary the caller was guarding.
+Consider [`os.Root`](https://pkg.go.dev/os#Root) if your code opens, writes or removes the file, because its methods refuse any name or symlink that leads outside the directory. Consider [`filepath.IsLocal`](https://pkg.go.dev/path/filepath#IsLocal) if you want one call that refuses an empty, absolute or escaping name and, on Windows, a reserved name such as `NUL`.
 
 ## Install
 
@@ -27,9 +25,7 @@ go get github.com/cplieger/pathinside/v2@latest
 
 ## Usage
 
-### Containment
-
-The root is the side you have exactly one of, fixed where the confinement boundary is decided; targets flow past it. Convert it once (the conversion is the whole construction) and judge every target with the method:
+Make the root once, where you decide the boundary, and judge each path against it:
 
 ```go
 root := pathinside.Root(cfg.WatchDir)
@@ -40,11 +36,9 @@ if !root.Contains(event.Name) {
 }
 ```
 
-The root and the target are both cleaned (`filepath.Rel` cleans base and target itself), so `/a/b/`, `/a/./b` and `/a/x/../b` are all the same root, and a caller that pre-cleans gets the same answer as one that does not. The root itself is inside: `Root(p).Contains(p)` is true for every non-empty p, because the tree includes its own root (a scan that starts there, a watch registered on it, an archive's `./` entry). A pair that cannot be compared lexically (an absolute target against a relative root, or two Windows volumes) is refused rather than guessed. The zero value `Root("")` contains nothing: an empty root is an unset field, and the fail-open reading (silently confining to the current working directory) is the direction a containment bug must not take; write `Root(".")` when cwd-relative containment is genuinely wanted.
+`Root` is a plain string conversion. The root and the target are both cleaned, and the root itself counts as inside.
 
-### Validating a relative name
-
-`RelEscapes` is the second half on its own, for the moment _before_ a name is joined onto anything:
+Check an archive entry name before you join it onto the extraction directory. `RelEscapes` does not judge whether a name is absolute, so refuse that yourself:
 
 ```go
 switch {
@@ -57,22 +51,7 @@ case pathinside.RelEscapes(name):
 }
 ```
 
-It also serves a caller that already holds a `filepath.Rel` result it needs for other work, so the containment question costs no second `Rel`:
-
-```go
-rel, err := filepath.Rel(root, path)
-if err != nil || pathinside.RelEscapes(rel) {
-    return false
-}
-_, err = rootDir.Stat(rel) // os.Root-relative, symlink-safe
-return err == nil
-```
-
-`RelEscapes` says nothing about whether the name is relative at all: `/etc/passwd` cleans to itself, is not `..`, and does not begin with `../`, so **the caller rejects absoluteness**. That refusal is not cosmetic: `filepath.Clean` clamps a traversal at the filesystem root, so `/..` cleans to `/` and is accepted here, while `filepath.Join` re-attaches the unclamped traversal to a relative base: `filepath.Join("data", "/..")` is `.`, above the root.
-
-### Syntactic hygiene
-
-No root and no cleaning: the value is judged as written, because a human was supposed to spell it plainly. The composed rule is the OR of both predicates:
+Check a path from a config file or a flag as written, with no root. Use both predicates, because `IsCanonical` alone accepts `..` and `../dumps`, which are already in clean form:
 
 ```go
 if !pathinside.IsCanonical(dir) || pathinside.HasDotDot(dir) {
@@ -80,38 +59,41 @@ if !pathinside.IsCanonical(dir) || pathinside.HasDotDot(dir) {
 }
 ```
 
-Both halves are needed, because neither implies the other. `..` and `../dumps` are perfectly canonical, so canonicality alone accepts a leading traversal; and `/dumps/../etc` traverses while `/dumps/a..b` and `key..v2` are ordinary names, so the traversal test is component-precise rather than a substring search. Canonicality is also what **bounds** the disagreement between the axes: `filepath.Clean` leaves `..` components only at the front of a relative path, so on canonical input `HasDotDot` and `RelEscapes` always agree, and they diverge only on unclean input, the input an attacker supplies.
+`ExampleRoot_Contains`, `ExampleRelEscapes`, `ExampleHasDotDot` and `ExampleIsCanonical` on pkg.go.dev are runnable, and `go test` keeps them true.
 
 ## API
 
-| Symbol | Contract |
-| --- | --- |
-| `Root` | The tree containment is judged against: a plain string conversion, `pathinside.Root("/srv/data")`, made once where the confinement boundary is decided. No validation, no normalization at conversion time: cleaning happens at judgment time. The zero value `Root("")` contains nothing (fail closed); `Root(".")` is the explicit cwd spelling. |
-| `(r Root) Contains(target string) bool` | Reports whether target is the root itself or a path beneath it. Root and target are both cleaned. Lexical: no symlink resolution. Case comparison is the platform's, inherited from `filepath.Rel`: byte-exact on Unix, folded on Windows. A pair `filepath.Rel` cannot compare (absolute against relative, differing Windows volumes) is false. |
-| `RelEscapes(rel string) bool` | Reports whether a relative name leaves the root it is relative to: it IS `..` or begins with `..` plus a separator. `rel` is cleaned first, so a buried traversal (`a/../../etc`) is caught. Says nothing about absoluteness; the caller rejects that. |
-| `HasDotDot(p string) bool` | Reports whether p holds a `..` **component**, examined as written. p is **not** cleaned, so a traversal that would normalize away is still caught. Components come from `filepath.ToSlash(p)` split on `/`, so a backslash counts only on Windows, where it is a separator. `...`, `..extras` and `key..v2` are names, not traversals. |
-| `IsCanonical(p string) bool` | Reports whether p is already in `filepath.Clean` form. Refuses a trailing or doubled separator, a `.` component, a buried traversal, and the empty string. `..` and `../dumps` are canonical; canonicality is not hygiene, so pair it with `HasDotDot`. |
+- Containment needs a root. It is the `Root` type and its `Contains` method, plus `RelEscapes` for a relative name or a `filepath.Rel` result.
+- Hygiene needs no root. `HasDotDot` finds a `..` component as written, and `IsCanonical` reports whether a path is already in `filepath.Clean` form.
 
-## Lexical, not enforced
+The full reference is on [pkg.go.dev](https://pkg.go.dev/github.com/cplieger/pathinside/v2).
 
-All four predicates compare **names** and resolve nothing. A symlink inside the root pointing anywhere at all is still lexically inside it, and a path that passes can be swapped between the check and the syscall.
+## Containment and hygiene answer different questions
 
-That is the right answer for a name-level decision (_is this path mine to handle_) and the wrong one for an access-level decision (_may this open succeed_). Callers that open, read, write, rename or remove through the path want kernel-enforced confinement: [`os.Root`](https://pkg.go.dev/os#Root) via `os.OpenRoot` / `os.OpenInRoot`, which refuses to traverse a symlink out of the tree and closes the TOCTOU window a lexical check cannot see. The two compose: the cheap lexical gate gives an early, quiet refusal and a clear operator message; the confined handle makes the operation itself safe.
+Containment cleans a path before it judges it. `/run/secrets/../../etc/shadow` cleans to `/etc/shadow`, which holds no `..`, so `RelEscapes` reports `false`. Hygiene judges the path as written, so `HasDotDot` reports `true`. Use `HasDotDot` and `IsCanonical` for a value a person typed, such as a credential path or a backup folder in a config file. A containment check there accepts the path you meant to refuse. `HasDotDot` and `RelEscapes` give different answers only on a path that is not already in `filepath.Clean` form.
 
-Lexical does not mean byte-exact everywhere, and the exception is **case**. `Root.Contains` delegates to `filepath.Rel`, which compares path components case-**insensitively** on Windows and byte-exactly on Unix and Plan 9, so `Root("/srv/Data").Contains("/srv/data/x")` is `false` on Linux and `true` on Windows. `Rel`'s own documentation does not state that, which is why it is stated here. On Windows the folding is the toolchain's simple Unicode case folding rather than the volume's own uppercase table, and a fold relation that grows makes containment **more permissive, never less**: the direction a containment bug takes. Go 1.27's Unicode 17 tables fold `U+FB05`/`U+FB06` and the Greek `U+0390`/`U+1FD3`, `U+03B0`/`U+1FE3` pairs that Go 1.26 held distinct, so Windows containment loosened by exactly those names. `RelEscapes`, `HasDotDot` and `IsCanonical` are immune on every platform: they compare against the literal `..`, whose runes have no case-fold partners.
+`RelEscapes` is also stricter than `Root.Contains`. Under root `a`, the name `../a` leaves the root and comes back to it. `RelEscapes` refuses it, because a valid name has no reason to leave its root. `Root.Contains` judges only where the joined path lands, so it accepts the result.
 
-## Name validation is stricter than containment
+[How the checks behave](docs/contract.md) has the full contract of each predicate.
 
-The two containment predicates do not always agree, and the disagreement is deliberate. A name that walks out of the root and back into a directory that happens to share the root's name (`../a` under root `a`) is refused by `RelEscapes` while its joined result (the root itself) is inside. `RelEscapes` judges the shape of a **name**; `Root.Contains` judges the location of a **result**. A caller validating an untrusted name wants the strict answer, because a legitimate name has no business leaving. Fusing the two would pick one answer for both callers.
+## The checks read names and resolve nothing
 
-## Unsupported by Design
+All four predicates compare names and never touch the filesystem. A symlink inside the root is still inside it by name, wherever it points, and a path can change between the check and its use. That fits a decision about a name, such as whether a path is yours to handle. When your code opens, reads, writes, renames or removes through the path, also use `os.Root` through `os.OpenRoot` or `os.OpenInRoot`. The name check gives an early refusal with a clear message, and `os.Root` makes the operation itself safe.
 
-| Feature | Rationale |
-| --- | --- |
-| Symlink resolution | It would turn a pure string predicate into a filesystem call with its own error mode, and still lose the TOCTOU race. `os.Root` is the answer, and it is in the standard library. |
-| A `SafeJoin`-style "validate and join" helper | The refusals a caller owes its user are the caller's: an empty name, an absolute name, and a traversal deserve distinct messages, and a helper that returns one error for all three makes them indistinguishable. Compose `RelEscapes` with `filepath.IsAbs` and `filepath.Join`. |
-| A variant that excludes the root | The one caller that needs it needs a different rule (it rejects equality _and_ wants its own error), and hiding that behind a flag would let a caller pick the wrong containment semantics with one boolean. Keep the equality test at the call site: `r.Contains(target) && filepath.Clean(target) != filepath.Clean(string(r))`. |
-| Case-insensitive or Unicode-normalizing comparison | Not added, and on Windows not removable either: `filepath.Rel` already compares components case-insensitively there, so `Root.Contains` inherits that (see [Lexical, not enforced](#lexical-not-enforced)). Folding and normalization are filesystem properties, not path properties, and getting them wrong in either direction is a security bug, so this package adds no folding of its own, and a caller that needs the mount's own equivalence asks the filesystem, not a string comparison. |
+Case is the one place `Root.Contains` is not byte-exact. It follows `filepath.Rel`, which ignores case on Windows and compares bytes on Unix and Plan 9. So `Root("/srv/Data").Contains("/srv/data/x")` is `false` on Linux and `true` on Windows. On Windows, Go folds case with its own Unicode tables rather than the volume's, so a newer Go release can make containment accept more names, never fewer. Case folding does not change what `RelEscapes`, `HasDotDot` or `IsCanonical` report on any platform, because `..` has no case-fold partners.
+
+## Unsupported by design
+
+pathinside has no symlink resolution, no helper that validates and joins, no variant that excludes the root, and no case folding or Unicode normalization of its own. [Unsupported by design](docs/non-goals.md) gives the reason for each and what to use instead.
+
+## Documentation
+
+- [How the checks behave](docs/contract.md) gives the full contract of each predicate, for code that relies on an edge case.
+- [Unsupported by design](docs/non-goals.md) lists the features left out on purpose, with the reasons.
+
+## Contributing
+
+Issues and pull requests are welcome. See the [contributing guide](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md).
 
 ## Disclaimer
 
