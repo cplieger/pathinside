@@ -93,7 +93,7 @@ pathinside has no symlink resolution, no helper that validates and joins, no var
 
 ## Contributing
 
-Issues and pull requests are welcome. See the [contributing guide](https://github.com/cplieger/.github/blob/main/CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 
