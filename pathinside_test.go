@@ -338,24 +338,12 @@ func TestIsCanonical(t *testing.T) {
 }
 
 // TestAxesDisagreeOnUncleanInput is the regression guard the two axes exist for.
-// On UNCLEAN input the two predicates give OPPOSITE answers: RelEscapes cleans
-// first, so a traversal that normalizes away leaves no root and reads false,
-// while HasDotDot examines the path as written and reads true. That is not a
-// near-miss but an INVERSION — asking the hygiene question with the containment
-// function turns a deliberate refusal into an acceptance.
-//
-// Four fleet repos would have done exactly that if RelEscapes had been adopted
-// at their hygiene boundaries, at a credential-read and a backup-destination
-// boundary: a config-supplied "/run/secrets/../../etc/shadow" cleans to
-// "/etc/shadow", which escapes no root, so the gate installed to refuse a
-// traversal would have opened on the very value it was installed to refuse, and
-// a backup destination "/dumps/../etc" would have been accepted as a write
-// target. Both are caught here and nowhere else, so a future change that folds
-// either function into the other breaks this test.
-//
-// The converse from the doc comments is asserted alongside it: cleaning is what
-// BOUNDS the disagreement, because Clean leaves ".." only at the front of a
-// relative path. On CANONICAL input the two axes AGREE.
+// On UNCLEAN input they give OPPOSITE answers: RelEscapes cleans first, so a
+// traversal that normalizes away reads false, while HasDotDot reads the path as
+// written and reads true. So cleaning can hide a dangerous traversal:
+// "/run/secrets/../../etc/shadow" cleans to "/etc/shadow", which escapes no
+// root, and "/dumps/../etc" passes as a backup target. Cleaning also BOUNDS the disagreement, because Clean leaves ".." only
+// at the front of a relative path, so on CANONICAL input the two axes AGREE.
 func TestAxesDisagreeOnUncleanInput(t *testing.T) {
 	unclean := []struct {
 		name           string
