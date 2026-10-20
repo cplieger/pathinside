@@ -1,6 +1,6 @@
 window.BENCHMARK_DATA = {
   "lastUpdate": 1792535805890,
-  "repoUrl": "https://github.com/cplieger/ci",
+  "repoUrl": "https://github.com/cplieger/pathinside",
   "entries": {
     "Benchmark": [
       {
@@ -3426,10 +3426,10 @@ window.BENCHMARK_DATA = {
             "username": "web-flow",
             "email": "noreply@github.com"
           },
-          "id": "7a612dde781d06affaab9bb82cb1fae62d9fc335",
-          "message": "chore(deps): update cplieger/ci digest to a43903f (#873)\n\nCo-authored-by: tribble-trouble[bot] <338123824+tribble-trouble[bot]@users.noreply.github.com>",
-          "timestamp": "2026-10-20T20:09:01Z",
-          "url": "https://github.com/cplieger/ci/commit/7a612dde781d06affaab9bb82cb1fae62d9fc335"
+          "id": "476f8e373febd45b1eac7c2dc81290920ee57441",
+          "message": "chore(sync): synced file(s) with cplieger/ci (#290)\n\nCo-authored-by: tribble-trouble[bot] <338123824+tribble-trouble[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-20T20:39:17Z",
+          "url": "https://github.com/cplieger/pathinside/commit/476f8e373febd45b1eac7c2dc81290920ee57441"
         },
         "date": 1792535805439,
         "tool": "customSmallerIsBetter",
