@@ -1,5 +1,8 @@
 # pathinside
 
+> Moved to [`github.com/cplieger/go/pathinside`](https://github.com/cplieger/go/tree/dev/pathinside).
+> **Archived 2026-11-06. This repository is read-only. The published Go module stays available.**
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/pathinside/v2.svg)](https://pkg.go.dev/github.com/cplieger/pathinside/v2) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/pathinside)](https://github.com/cplieger/pathinside/blob/main/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/pathinside/badges/mutation.json)](https://github.com/cplieger/pathinside/issues?q=label%3Agremlins-tracker)
 
 pathinside catches path traversal in Go by checking that an untrusted path stays inside its root, and that a path from a config file was written without `..`.
